@@ -68,16 +68,31 @@ def _parse_rhythms(root: ET.Element) -> dict:
         nv = nv_el.text.strip() if nv_el is not None and nv_el.text else "Quarter"
         base = _NOTE_VALUE_TICKS.get(nv, 960)
 
-        dot_el = r.find("AugmentationDot/Count")
-        dots = int(dot_el.text) if dot_el is not None and dot_el.text else 0
+        # AugmentationDot uses attribute "count" (not child element Count)
+        dot_el = r.find("AugmentationDot")
+        dots = 0
+        if dot_el is not None:
+            count_attr = dot_el.get("count")
+            if count_attr:
+                dots = int(count_attr)
+            else:
+                count_child = dot_el.find("Count")
+                if count_child is not None and count_child.text:
+                    dots = int(count_child.text)
 
+        # PrimaryTuplet uses attributes "num"/"den" (not child elements Num/Den)
         tup = r.find("PrimaryTuplet")
         t_num, t_den = 1, 1
         if tup is not None:
-            n = tup.find("Num")
-            d = tup.find("Den")
-            if n is not None and n.text: t_num = int(n.text)
-            if d is not None and d.text: t_den = int(d.text)
+            num_attr = tup.get("num")
+            den_attr = tup.get("den")
+            if num_attr and den_attr:
+                t_num, t_den = int(num_attr), int(den_attr)
+            else:
+                n = tup.find("Num")
+                d = tup.find("Den")
+                if n is not None and n.text: t_num = int(n.text)
+                if d is not None and d.text: t_den = int(d.text)
 
         ticks = base
         if dots == 1:   ticks = ticks * 3 // 2
@@ -353,11 +368,22 @@ def _parse_tracks(root: ET.Element) -> list:
 
 
 def _parse_masterbars(root: ET.Element) -> list:
+    """Returns list of (bar_ids, bar_ticks) per MasterBar."""
     result = []
     for mb in root.findall("MasterBars/MasterBar"):
         bars_el = mb.find("Bars")
         bar_ids = bars_el.text.split() if bars_el is not None and bars_el.text else []
-        result.append(bar_ids)
+
+        time_el = mb.find("Time")
+        bar_ticks = 3840  # default 4/4 at 960 tpb
+        if time_el is not None and time_el.text:
+            try:
+                num, den = map(int, time_el.text.strip().split("/"))
+                bar_ticks = num * 3840 // den
+            except (ValueError, ZeroDivisionError):
+                pass
+
+        result.append((bar_ids, bar_ticks))
     return result
 
 
@@ -476,18 +502,18 @@ def parse_gp7_file(filepath: str) -> tuple:
             channel=track_data["channel"],
         )
 
-        # Each MasterBar has one bar ID per track
-        bar_ids = [
-            mb[track_idx]
+        # Each MasterBar has one bar ID per track; keep bar_ticks for rest-only bars
+        bar_id_ticks = [
+            (mb[0][track_idx], mb[1])
             for mb in masterbars
-            if track_idx < len(mb) and mb[track_idx] != "-1"
+            if track_idx < len(mb[0]) and mb[0][track_idx] != "-1"
         ]
 
         current_tick = 0
         active_ties: dict = {}          # string → NoteEvent (タイ蓄積中)
         last_pitch: dict = {}           # string → 直前ノートのMIDIピッチ（H/P判定用）
 
-        for bar_id in bar_ids:
+        for bar_id, mb_ticks in bar_id_ticks:
             bar_voices = bars_map.get(bar_id, [])
             bar_end_tick = current_tick
 
@@ -547,6 +573,10 @@ def parse_gp7_file(filepath: str) -> tuple:
 
                     voice_tick += dur
                 bar_end_tick = max(bar_end_tick, voice_tick)
+
+            # 全ボイスが -1 の小節（全休符など）はMasterBarの拍子から長さを算出
+            if bar_end_tick == current_tick:
+                bar_end_tick = current_tick + mb_ticks
 
             current_tick = bar_end_tick
 
