@@ -107,7 +107,18 @@ def generate_midi(
     track.append(mido.MetaMessage('set_tempo', tempo=mido.bpm2tempo(tempo_bpm), time=0))
 
     messages = []   # (abs_tick, msg)
-    last_articulation = None
+
+    # Insert default keyswitch at MIDI start (tick 0)
+    default_art = getattr(mapping, 'default_articulation', '')
+    if default_art:
+        ks_note = mapping.get_note(default_art)
+        if ks_note is not None:
+            messages.append((0, mido.Message('note_on',  channel=keyswitch_channel,
+                                             note=ks_note, velocity=100, time=0)))
+            messages.append((1, mido.Message('note_off', channel=keyswitch_channel,
+                                             note=ks_note, velocity=0,   time=0)))
+
+    last_articulation = default_art or None
 
     for event in sorted(events, key=lambda e: e.tick):
         abs_tick  = _scale_tick(event.tick)

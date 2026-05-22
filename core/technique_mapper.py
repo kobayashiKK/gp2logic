@@ -111,6 +111,7 @@ class KeyswitchMapping:
     """Maps articulation IDs to MIDI note numbers and optional velocity triggers."""
     note_map: dict = field(default_factory=dict)        # articulation_id -> midi_note (int or None)
     velocity_triggers: list = field(default_factory=list)  # list of VelocityTrigger
+    default_articulation: str = ""  # keyswitch inserted at MIDI start (empty = none)
 
     def get_note(self, articulation_id: str) -> Optional[int]:
         return self.note_map.get(articulation_id)
@@ -119,13 +120,16 @@ class KeyswitchMapping:
         self.note_map[articulation_id] = midi_note
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "note_map": {k: v for k, v in self.note_map.items() if v is not None},
             "velocity_triggers": [
                 {"min": vt.min_vel, "max": vt.max_vel, "articulation": vt.articulation_id}
                 for vt in self.velocity_triggers
             ],
         }
+        if self.default_articulation:
+            d["default_articulation"] = self.default_articulation
+        return d
 
     @classmethod
     def from_dict(cls, data: dict) -> "KeyswitchMapping":
@@ -135,6 +139,7 @@ class KeyswitchMapping:
             VelocityTrigger(vt["min"], vt["max"], vt["articulation"])
             for vt in data.get("velocity_triggers", [])
         ]
+        mapping.default_articulation = data.get("default_articulation", "")
         return mapping
 
 

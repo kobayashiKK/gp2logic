@@ -38,6 +38,7 @@
     "finger_pluck_dead":          10,
     "thumb_slap":                 11
   },
+  "default_articulation": "alternate_picked",
   "velocity_triggers": [
     { "min": 127, "max": 127, "articulation": "pinch_harmonic" },
     { "min": 35,  "max": 126, "articulation": "alternate_picked" },

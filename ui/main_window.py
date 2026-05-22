@@ -48,6 +48,7 @@ class MainWindow(QMainWindow):
         self._tracks: list[TrackInfo] = []
         self._mapping = KeyswitchMapping()
         self._midi_bytes: bytes | None = None
+        self._current_filepath: str | None = None
 
         self._build_menu()
         self._build_ui()
@@ -67,6 +68,12 @@ class MainWindow(QMainWindow):
         open_act.setShortcut("Ctrl+O")
         open_act.triggered.connect(self._open_file)
         file_menu.addAction(open_act)
+
+        self._reload_act = QAction("再読込", self)
+        self._reload_act.setShortcut("Ctrl+R")
+        self._reload_act.setEnabled(False)
+        self._reload_act.triggered.connect(self._reload_file)
+        file_menu.addAction(self._reload_act)
 
         preset_menu = menu.addMenu("プリセット")
         save_preset_act = QAction("現在のマッピングをプリセットとして保存…", self)
@@ -90,6 +97,13 @@ class MainWindow(QMainWindow):
         self._open_btn.setFixedHeight(32)
         self._open_btn.clicked.connect(self._open_file)
         top.addWidget(self._open_btn)
+
+        self._reload_btn = QPushButton("🔄")
+        self._reload_btn.setFixedSize(32, 32)
+        self._reload_btn.setToolTip("再読込 (Cmd+R)")
+        self._reload_btn.setEnabled(False)
+        self._reload_btn.clicked.connect(self._reload_file)
+        top.addWidget(self._reload_btn)
 
         self._file_label = QLabel("ファイル未選択")
         self._file_label.setStyleSheet("color: #aaa;")
@@ -144,6 +158,22 @@ class MainWindow(QMainWindow):
         # Keyswitch table + velocity triggers
         ks_group = QGroupBox("キースイッチ設定")
         ks_layout = QVBoxLayout(ks_group)
+
+        # Default keyswitch selector
+        default_row = QHBoxLayout()
+        default_row.addWidget(QLabel("初期キースイッチ:"))
+        self._default_art_combo = QComboBox()
+        self._default_art_combo.addItem("— なし —", "")
+        from core.technique_mapper import ARTICULATION_LABELS
+        for art_id in ARTICULATION_IDS:
+            label = ARTICULATION_LABELS.get(art_id, art_id)
+            self._default_art_combo.addItem(label, art_id)
+        self._default_art_combo.setMinimumWidth(200)
+        self._default_art_combo.currentIndexChanged.connect(self._on_mapping_changed)
+        default_row.addWidget(self._default_art_combo)
+        default_row.addStretch()
+        ks_layout.addLayout(default_row)
+
         self._ks_table = KeyswitchTableWidget()
         self._ks_table.mapping_changed.connect(self._on_mapping_changed)
         ks_layout.addWidget(self._ks_table)
@@ -203,9 +233,17 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "ファイルアクセスエラー", str(e))
             return
 
+        self._current_filepath = path
+        self._reload_btn.setEnabled(True)
+        self._reload_act.setEnabled(True)
         self._file_label.setText(Path(path).name)
         self._status("ファイルを読み込んでいます…")
         self._start_parse(path)
+
+    def _reload_file(self):
+        if self._current_filepath:
+            self._status("再読込しています…")
+            self._start_parse(self._current_filepath)
 
     def _start_parse(self, filepath: str):
         self._thread = QThread()
@@ -318,12 +356,19 @@ class MainWindow(QMainWindow):
         self._mapping = mapping
         self._ks_table.set_mapping(mapping)
         self._vel_widget.set_triggers(mapping.velocity_triggers)
+        # Sync default articulation combo
+        default_art = mapping.default_articulation or ""
+        self._default_art_combo.blockSignals(True)
+        idx = self._default_art_combo.findData(default_art)
+        self._default_art_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._default_art_combo.blockSignals(False)
         self._midi_bytes = None
         self._drag_widget.set_midi_bytes(None)
 
     def _collect_mapping(self) -> KeyswitchMapping:
         mapping = self._ks_table.get_mapping()
         mapping.velocity_triggers = self._vel_widget.get_triggers()
+        mapping.default_articulation = self._default_art_combo.currentData() or ""
         return mapping
 
     def _on_mapping_changed(self):
