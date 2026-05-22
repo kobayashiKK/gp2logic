@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QLabel, QComboBox, QFileDialog, QSplitter, QGroupBox,
     QStatusBar, QDialog, QDialogButtonBox, QLineEdit, QMessageBox,
-    QSizePolicy
+    QSizePolicy, QSpinBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
 from PyQt6.QtGui import QFont, QAction
@@ -122,6 +122,14 @@ class MainWindow(QMainWindow):
         preset_bar.addWidget(save_btn)
 
         preset_bar.addStretch()
+
+        preset_bar.addWidget(QLabel("オクターブ:"))
+        self._octave_spin = QSpinBox()
+        self._octave_spin.setRange(-3, 3)
+        self._octave_spin.setValue(1)
+        self._octave_spin.setFixedWidth(52)
+        self._octave_spin.valueChanged.connect(self._on_mapping_changed)
+        preset_bar.addWidget(self._octave_spin)
 
         generate_btn = QPushButton("▶ MIDI生成")
         generate_btn.setFixedHeight(30)
@@ -344,10 +352,14 @@ class MainWindow(QMainWindow):
         if self._song and hasattr(self._song, 'tempo'):
             tempo = float(self._song.tempo) or 120.0
 
+        pitch_offset = self._octave_spin.value() * 12
         try:
-            self._midi_bytes = generate_midi(track.events, mapping, tempo_bpm=tempo)
+            self._midi_bytes = generate_midi(
+                track.events, mapping, tempo_bpm=tempo, pitch_offset=pitch_offset
+            )
             self._drag_widget.set_midi_bytes(self._midi_bytes)
-            self._status(f"MIDI生成完了 ({len(self._midi_bytes)} bytes) — Logicにドラッグしてください。")
+            oct_str = f"+{self._octave_spin.value()}" if self._octave_spin.value() >= 0 else str(self._octave_spin.value())
+            self._status(f"MIDI生成完了 ({len(self._midi_bytes)} bytes, オクターブ{oct_str}) — Logicにドラッグしてください。")
         except Exception as e:
             QMessageBox.critical(self, "MIDI生成エラー", str(e))
 

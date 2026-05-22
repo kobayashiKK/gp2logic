@@ -93,6 +93,7 @@ def generate_midi(
     tempo_bpm: float = 120.0,
     midi_channel: int = 0,
     keyswitch_channel: int = 0,
+    pitch_offset: int = 0,
 ) -> bytes:
     """
     Build a .mid file from NoteEvents + KeyswitchMapping.
@@ -127,7 +128,7 @@ def generate_midi(
         messages.extend(_build_bend_messages(event, abs_tick, dur_ticks, midi_channel))
 
         # Note on / off
-        pitch = event.midi_pitch
+        pitch = event.midi_pitch + pitch_offset
         if 0 <= pitch <= 127:
             messages.append((abs_tick,            mido.Message('note_on',  channel=midi_channel,
                                                                note=pitch, velocity=vel, time=0)))
