@@ -52,6 +52,7 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self._build_ui()
         self._load_preset_list()
+        self._auto_load_first_preset()
         self._status("GuitarProファイルを開いてください。")
 
     # ──────────────────────────────────────────────────────
@@ -240,6 +241,17 @@ class MainWindow(QMainWindow):
     # ──────────────────────────────────────────────────────
     # Preset management
     # ──────────────────────────────────────────────────────
+
+    def _auto_load_first_preset(self):
+        if self._presets:
+            try:
+                name, mapping = load_preset(self._presets[0]['path'])
+                self._apply_mapping(mapping)
+                self._preset_combo.blockSignals(True)
+                self._preset_combo.setCurrentIndex(1)
+                self._preset_combo.blockSignals(False)
+            except Exception:
+                pass
 
     def _load_preset_list(self):
         self._presets = list_presets()

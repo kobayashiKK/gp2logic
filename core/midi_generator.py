@@ -69,13 +69,21 @@ def _build_bend_messages(event, abs_tick: int, dur_ticks: int, channel: int) -> 
     return msgs
 
 
+# Velocityトリガーで上書き可能な「汎用ピッキング系」奏法
+_VEL_OVERRIDABLE = {
+    "alternate_picked", "down_picked", "up_picked",
+    "palm_mute_down", "palm_mute_up", "palm_mute_alt",
+}
+
 def _velocity_for_event(event, mapping: KeyswitchMapping) -> tuple:
     vel = event.velocity
     art = event.articulation_id
-    for vt in mapping.velocity_triggers:
-        if vt.min_vel <= vel <= vt.max_vel:
-            art = vt.articulation_id
-            break
+    # H/P・ハーモニクス・スライド等の固有奏法はvelocityトリガーで上書きしない
+    if art in _VEL_OVERRIDABLE:
+        for vt in mapping.velocity_triggers:
+            if vt.min_vel <= vel <= vt.max_vel:
+                art = vt.articulation_id
+                break
     return vel, art
 
 
