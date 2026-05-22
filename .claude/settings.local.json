@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat)",
+      "Bash(/Users/kogoekenta/Documents/gp_midi_logic/.venv/bin/python /tmp/test_gp.py)",
+      "Read(//tmp/**)",
+      "Bash(/Users/kogoekenta/Documents/gp_midi_logic/.venv/bin/python /tmp/inspect_gp.py)",
+      "Bash(/Users/kogoekenta/Documents/gp_midi_logic/.venv/bin/python /tmp/inspect2.py)"
+    ]
+  }
+}
