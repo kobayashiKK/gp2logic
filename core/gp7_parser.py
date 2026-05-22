@@ -285,10 +285,9 @@ def _parse_notes(root: ET.Element) -> dict:
                     _prop_enabled(n, "BendedStrong") or
                     _prop(n, "Bend") is not None)
 
-        # Hammer-on / pull-off
-        is_hopo = (_prop_enabled(n, "HopoDestination") or
-                   _prop_enabled(n, "Hopo") or
-                   _prop_enabled(n, "HopoOrigin"))
+        # HopoDestination = この音がハンマリング/プリングで鳴る音
+        # HopoOrigin は「次の音がH/P」という意味なので起点音自体は普通に弾く
+        is_hopo = _prop_enabled(n, "HopoDestination")
 
         # Dead / muted note
         is_dead = _prop_enabled(n, "Muted") or _prop_enabled(n, "DeadNote")
@@ -485,8 +484,8 @@ def parse_gp7_file(filepath: str) -> tuple:
         ]
 
         current_tick = 0
-        # Accumulate tied notes: string_num → NoteEvent (not yet appended)
-        active_ties: dict = {}
+        active_ties: dict = {}          # string → NoteEvent (タイ蓄積中)
+        last_pitch: dict = {}           # string → 直前ノートのMIDIピッチ（H/P判定用）
 
         for bar_id in bar_ids:
             bar_voices = bars_map.get(bar_id, [])
@@ -520,6 +519,17 @@ def parse_gp7_file(filepath: str) -> tuple:
                                 info.events.append(active_ties.pop(note.string))
 
                             art = _resolve_art(note, beat)
+
+                            # H/P判定: HopoDestinationノートの場合、前の音より高い→HO、低い→PO
+                            if note.is_hopo:
+                                prev = last_pitch.get(note.string)
+                                if prev is not None and note.midi_pitch < prev:
+                                    art = "pull_off"
+                                else:
+                                    art = "hammer_on"
+
+                            last_pitch[note.string] = note.midi_pitch
+
                             evt = NoteEvent(
                                 tick=voice_tick,
                                 duration_ticks=dur,
