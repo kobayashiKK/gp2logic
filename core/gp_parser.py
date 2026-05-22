@@ -8,6 +8,13 @@ import guitarpro
 
 
 @dataclass
+class BendPoint:
+    """One point in a pitch-bend envelope, as a fraction of note duration."""
+    offset_frac: float   # 0.0 = note start, 1.0 = note end
+    semitones: float     # positive = bend up (1.0 = 1 semitone)
+
+
+@dataclass
 class NoteEvent:
     """A single note with its position in ticks and detected articulation."""
     tick: int
@@ -15,9 +22,8 @@ class NoteEvent:
     midi_pitch: int          # The actual pitch of the note
     velocity: int
     articulation_id: str     # canonical articulation key
-    string_num: int = 0      # 1-based string number (0 = unknown)
-    # Raw flags for debugging
-    raw_flags: dict = field(default_factory=dict)
+    string_num: int = 0      # 0-based string number (GPIF convention)
+    bend_points: list = field(default_factory=list)  # list of BendPoint
 
 
 @dataclass

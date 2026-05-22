@@ -190,6 +190,7 @@ class _NoteInfo:
     string: int           # 0-based (GPIF convention)
     fret: int
     is_tie_dest: bool
+    is_tie_origin: bool
     articulation_id: str
     is_dead: bool
     is_hopo: bool
@@ -197,6 +198,45 @@ class _NoteInfo:
     has_bend: bool
     has_vibrato: bool
     harmonic_type: Optional[str]
+    bend_points: list = field(default_factory=list)  # list of (offset_frac, semitones)
+
+
+def _parse_bend_points(n: ET.Element) -> list:
+    """
+    Parse GPIF bend envelope into [(offset_frac, semitones), ...].
+    GPIF stores offsets as 0-100 percentages, values in quarter-tone units
+    where 25 = 1 quarter-tone, 50 = 1 semitone, 100 = 1 whole tone (2 semitones).
+    We convert: semitones = value / 50.0
+    """
+    def _float(name):
+        v = _prop_text(n, name, "Float")
+        return float(v) if v is not None else None
+
+    from .gp_parser import BendPoint
+    points = []
+
+    origin_off = _float("BendOriginOffset")
+    origin_val = _float("BendOriginValue")
+    if origin_off is not None and origin_val is not None:
+        points.append(BendPoint(origin_off / 100.0, origin_val / 50.0))
+
+    for i in ("1", "2"):
+        mid_off = _float(f"BendMiddleOffset{i}")
+        mid_val = _float("BendMiddleValue") if i == "1" else None
+        if mid_off is not None and mid_val is not None:
+            points.append(BendPoint(mid_off / 100.0, mid_val / 50.0))
+
+    dest_off = _float("BendDestinationOffset")
+    dest_val = _float("BendDestinationValue")
+    if dest_off is not None and dest_val is not None:
+        points.append(BendPoint(dest_off / 100.0, dest_val / 50.0))
+
+    # Sort by offset and ensure we start from 0
+    points.sort(key=lambda p: p.offset_frac)
+    if not points or points[0].offset_frac > 0.0:
+        points.insert(0, BendPoint(0.0, 0.0))
+
+    return points
 
 
 def _parse_notes(root: ET.Element) -> dict:
@@ -204,10 +244,11 @@ def _parse_notes(root: ET.Element) -> dict:
     for n in root.findall("Notes/Note"):
         nid = n.get("id")
 
-        # Tie destination → this note re-uses previous sound, skip
         tie_el = n.find("Tie")
-        is_tie_dest = (tie_el is not None and
-                       tie_el.get("destination", "false").lower() == "true")
+        is_tie_dest   = (tie_el is not None and
+                         tie_el.get("destination", "false").lower() == "true")
+        is_tie_origin = (tie_el is not None and
+                         tie_el.get("origin", "false").lower() == "true")
 
         # MIDI pitch: use Midi property directly (most reliable)
         midi_num = _prop_text(n, "Midi", "Number")
@@ -274,11 +315,14 @@ def _parse_notes(root: ET.Element) -> dict:
         elif is_dead:
             art = "dead_note"
 
+        bend_points = _parse_bend_points(n) if has_bend else []
+
         notes[nid] = _NoteInfo(
             midi_pitch=midi_pitch,
             string=string,
             fret=fret,
             is_tie_dest=is_tie_dest,
+            is_tie_origin=is_tie_origin,
             articulation_id=art,
             is_dead=is_dead,
             is_hopo=is_hopo,
@@ -286,6 +330,7 @@ def _parse_notes(root: ET.Element) -> dict:
             has_bend=has_bend,
             has_vibrato=has_vibrato,
             harmonic_type=h_type,
+            bend_points=bend_points,
         )
     return notes
 
@@ -386,7 +431,7 @@ def _pm_dead(d: Optional[str]) -> str:
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-from .gp_parser import TrackInfo, NoteEvent
+from .gp_parser import TrackInfo, NoteEvent, BendPoint
 
 
 def parse_gp7_file(filepath: str) -> tuple:
@@ -440,6 +485,9 @@ def parse_gp7_file(filepath: str) -> tuple:
         ]
 
         current_tick = 0
+        # Accumulate tied notes: string_num → NoteEvent (not yet appended)
+        active_ties: dict = {}
+
         for bar_id in bar_ids:
             bar_voices = bars_map.get(bar_id, [])
             bar_end_tick = current_tick
@@ -454,24 +502,47 @@ def parse_gp7_file(filepath: str) -> tuple:
 
                     for nid in beat.note_ids:
                         note = notes_map.get(nid)
-                        if note is None or note.is_tie_dest:
+                        if note is None:
                             continue
 
-                        art = _resolve_art(note, beat)
+                        if note.is_tie_dest:
+                            # Extend the active tied note on this string
+                            tied_evt = active_ties.get(note.string)
+                            if tied_evt is not None:
+                                tied_evt.duration_ticks += dur
+                            # If this note is also a tie origin, keep it active;
+                            # otherwise it's the last in the chain → emit it
+                            if not note.is_tie_origin and tied_evt is not None:
+                                info.events.append(active_ties.pop(note.string))
+                        else:
+                            # New note: close any previous tied note on this string
+                            if note.string in active_ties:
+                                info.events.append(active_ties.pop(note.string))
 
-                        info.events.append(NoteEvent(
-                            tick=voice_tick,
-                            duration_ticks=dur,
-                            midi_pitch=note.midi_pitch,
-                            velocity=beat.velocity,
-                            articulation_id=art,
-                            string_num=note.string,
-                        ))
+                            art = _resolve_art(note, beat)
+                            evt = NoteEvent(
+                                tick=voice_tick,
+                                duration_ticks=dur,
+                                midi_pitch=note.midi_pitch,
+                                velocity=beat.velocity,
+                                articulation_id=art,
+                                string_num=note.string,
+                                bend_points=list(note.bend_points),
+                            )
+
+                            if note.is_tie_origin:
+                                active_ties[note.string] = evt
+                            else:
+                                info.events.append(evt)
 
                     voice_tick += dur
                 bar_end_tick = max(bar_end_tick, voice_tick)
 
             current_tick = bar_end_tick
+
+        # Flush any remaining tied notes at end of track
+        for evt in active_ties.values():
+            info.events.append(evt)
 
         result_tracks.append(info)
 
