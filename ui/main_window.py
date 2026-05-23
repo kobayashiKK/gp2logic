@@ -18,7 +18,7 @@ from core.midi_generator import generate_midi
 from core.technique_mapper import KeyswitchMapping, ARTICULATION_IDS
 from core.preset_manager import list_presets, load_preset, save_preset
 
-from ui.keyswitch_editor import KeyswitchTableWidget, VelocityTriggerWidget
+from ui.keyswitch_editor import KeyswitchTableWidget
 from ui.drag_export_widget import DragExportWidget
 
 
@@ -178,9 +178,6 @@ class MainWindow(QMainWindow):
         self._ks_table.mapping_changed.connect(self._on_mapping_changed)
         ks_layout.addWidget(self._ks_table)
 
-        self._vel_widget = VelocityTriggerWidget()
-        self._vel_widget.changed.connect(self._on_mapping_changed)
-        ks_layout.addWidget(self._vel_widget)
         splitter.addWidget(ks_group)
 
         # Drag export
@@ -355,7 +352,6 @@ class MainWindow(QMainWindow):
     def _apply_mapping(self, mapping: KeyswitchMapping):
         self._mapping = mapping
         self._ks_table.set_mapping(mapping)
-        self._vel_widget.set_triggers(mapping.velocity_triggers)
         # Sync default articulation combo
         default_art = mapping.default_articulation or ""
         self._default_art_combo.blockSignals(True)
@@ -367,7 +363,6 @@ class MainWindow(QMainWindow):
 
     def _collect_mapping(self) -> KeyswitchMapping:
         mapping = self._ks_table.get_mapping()
-        mapping.velocity_triggers = self._vel_widget.get_triggers()
         mapping.default_articulation = self._default_art_combo.currentData() or ""
         return mapping
 

@@ -4,6 +4,9 @@
     "alternate_picked":           24,
     "down_picked":                25,
     "up_picked":                  26,
+    "palm_mute_alt":              12,
+    "palm_mute_down":             12,
+    "palm_mute_up":               15,
     "palm_mute_semi_closed_alt":  27,
     "palm_mute_semi_closed_down": 28,
     "palm_mute_semi_closed_up":   29,
@@ -13,10 +16,8 @@
     "palm_mute_dead_alt":         33,
     "palm_mute_dead_down":        34,
     "palm_mute_dead_up":          35,
-    "palm_mute_down":             12,
     "hammer_on":                  13,
     "pull_off":                   14,
-    "palm_mute_up":               15,
     "bend_up_fast":               16,
     "bend_up_slow":               17,
     "slide_auto":                 18,
@@ -38,12 +39,5 @@
     "finger_pluck_dead":          10,
     "thumb_slap":                 11
   },
-  "default_articulation": "alternate_picked",
-  "velocity_triggers": [
-    { "min": 127, "max": 127, "articulation": "pinch_harmonic" },
-    { "min": 35,  "max": 126, "articulation": "alternate_picked" },
-    { "min": 25,  "max": 34,  "articulation": "palm_mute_down" },
-    { "min": 15,  "max": 24,  "articulation": "palm_mute_closed_down" },
-    { "min": 0,   "max": 14,  "articulation": "palm_mute_dead_down" }
-  ]
+  "default_articulation": "alternate_picked"
 }

@@ -69,22 +69,12 @@ def _build_bend_messages(event, abs_tick: int, dur_ticks: int, channel: int) -> 
     return msgs
 
 
-# Velocityトリガーで上書き可能な「汎用ピッキング系」奏法
-_VEL_OVERRIDABLE = {
-    "alternate_picked", "down_picked", "up_picked",
-    "palm_mute_down", "palm_mute_up", "palm_mute_alt",
-}
-
 def _velocity_for_event(event, mapping: KeyswitchMapping) -> tuple:
-    vel = event.velocity
-    art = event.articulation_id
-    # H/P・ハーモニクス・スライド等の固有奏法はvelocityトリガーで上書きしない
-    if art in _VEL_OVERRIDABLE:
-        for vt in mapping.velocity_triggers:
-            if vt.min_vel <= vel <= vt.max_vel:
-                art = vt.articulation_id
-                break
-    return vel, art
+    """Return (velocity, articulation_id).
+    Velocity triggers have been removed — articulation comes entirely from GPIF
+    technique detection (note/beat/bar level).  Velocity only affects note loudness.
+    """
+    return event.velocity, event.articulation_id
 
 
 def generate_midi(
@@ -108,8 +98,9 @@ def generate_midi(
 
     messages = []   # (abs_tick, msg)
 
-    # Insert default keyswitch at MIDI start (tick 0)
     default_art = getattr(mapping, 'default_articulation', '')
+
+    # Insert default keyswitch at MIDI start (tick 0) to initialize the sampler
     if default_art:
         ks_note = mapping.get_note(default_art)
         if ks_note is not None:
@@ -118,6 +109,7 @@ def generate_midi(
             messages.append((1, mido.Message('note_off', channel=keyswitch_channel,
                                              note=ks_note, velocity=0,   time=0)))
 
+    # Treat the initial state as "default" so the first note doesn't redundantly re-insert
     last_articulation = default_art or None
 
     for event in sorted(events, key=lambda e: e.tick):
@@ -125,15 +117,22 @@ def generate_midi(
         dur_ticks = max(1, _scale_tick(event.duration_ticks))
         vel, art  = _velocity_for_event(event, mapping)
 
-        # Keyswitch on articulation change
+        # Determine keyswitch: use the art's own mapping, or fall back to default
         ks_note = mapping.get_note(art)
-        if ks_note is not None and art != last_articulation:
+        effective_art = art
+        if ks_note is None and default_art:
+            # No specific keyswitch for this articulation → use default as fallback
+            ks_note = mapping.get_note(default_art)
+            if ks_note is not None:
+                effective_art = default_art
+
+        if ks_note is not None and effective_art != last_articulation:
             ks_tick = max(0, abs_tick - 1)
             messages.append((ks_tick,     mido.Message('note_on',  channel=keyswitch_channel,
                                                         note=ks_note, velocity=100, time=0)))
             messages.append((ks_tick + 1, mido.Message('note_off', channel=keyswitch_channel,
                                                         note=ks_note, velocity=0,   time=0)))
-            last_articulation = art
+            last_articulation = effective_art
 
         # Pitch bend events
         messages.extend(_build_bend_messages(event, abs_tick, dur_ticks, midi_channel))

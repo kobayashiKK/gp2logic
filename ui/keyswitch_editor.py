@@ -11,7 +11,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 
 from core.technique_mapper import (
-    ARTICULATION_IDS, ARTICULATION_LABELS, KeyswitchMapping, VelocityTrigger,
+    ARTICULATION_IDS, ARTICULATION_LABELS, KeyswitchMapping,
     midi_note_to_name, note_name_to_midi
 )
 
@@ -190,92 +190,5 @@ class KeyswitchTableWidget(QWidget):
                 break
 
 
-class VelocityTriggerWidget(QGroupBox):
-    """Editor for velocity-range → articulation triggers."""
-    changed = pyqtSignal()
-
-    def __init__(self, parent=None):
-        super().__init__("Velocity トリガー", parent)
-        self._triggers: list[VelocityTrigger] = []
-        layout = QVBoxLayout(self)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setMaximumHeight(150)
-        self._inner = QWidget()
-        self._inner_layout = QVBoxLayout(self._inner)
-        self._inner_layout.setContentsMargins(0, 0, 0, 0)
-        self._inner_layout.addStretch()
-        scroll.setWidget(self._inner)
-        layout.addWidget(scroll)
-
-        add_btn = QPushButton("+ トリガーを追加")
-        add_btn.clicked.connect(self._add_trigger)
-        layout.addWidget(add_btn)
-
-    def set_triggers(self, triggers: list[VelocityTrigger]):
-        self._triggers = list(triggers)
-        self._rebuild()
-
-    def get_triggers(self) -> list[VelocityTrigger]:
-        return list(self._triggers)
-
-    def _rebuild(self):
-        while self._inner_layout.count() > 1:
-            item = self._inner_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        for i, vt in enumerate(self._triggers):
-            self._inner_layout.insertWidget(i, self._make_row(i, vt))
-
-    def _make_row(self, idx: int, vt: VelocityTrigger) -> QWidget:
-        row = QWidget()
-        hl = QHBoxLayout(row)
-        hl.setContentsMargins(0, 0, 0, 0)
-
-        min_spin = QSpinBox()
-        min_spin.setRange(0, 127)
-        min_spin.setValue(vt.min_vel)
-        max_spin = QSpinBox()
-        max_spin.setRange(0, 127)
-        max_spin.setValue(vt.max_vel)
-
-        combo = QComboBox()
-        for art_id in ARTICULATION_IDS:
-            combo.addItem(ARTICULATION_LABELS.get(art_id, art_id), art_id)
-        cur_idx = ARTICULATION_IDS.index(vt.articulation_id) if vt.articulation_id in ARTICULATION_IDS else 0
-        combo.setCurrentIndex(cur_idx)
-
-        def on_change():
-            self._triggers[idx] = VelocityTrigger(
-                min_spin.value(), max_spin.value(),
-                combo.currentData()
-            )
-            self.changed.emit()
-
-        min_spin.valueChanged.connect(on_change)
-        max_spin.valueChanged.connect(on_change)
-        combo.currentIndexChanged.connect(on_change)
-
-        del_btn = QPushButton("✕")
-        del_btn.setFixedWidth(28)
-        del_btn.clicked.connect(lambda: self._delete(idx))
-
-        hl.addWidget(QLabel("Vel"))
-        hl.addWidget(min_spin)
-        hl.addWidget(QLabel("–"))
-        hl.addWidget(max_spin)
-        hl.addWidget(QLabel("→"))
-        hl.addWidget(combo, 1)
-        hl.addWidget(del_btn)
-        return row
-
-    def _add_trigger(self):
-        self._triggers.append(VelocityTrigger(64, 127, "alternate_picked"))
-        self._rebuild()
-        self.changed.emit()
-
-    def _delete(self, idx: int):
-        del self._triggers[idx]
-        self._rebuild()
-        self.changed.emit()
+# VelocityTriggerWidget was removed — articulation is now determined
+# entirely from GPIF technique marks, not MIDI velocity ranges.

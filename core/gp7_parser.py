@@ -121,14 +121,28 @@ def _parse_voices_section(root: ET.Element) -> dict:
 
 # ── Bars ─────────────────────────────────────────────────────────────────────
 
+@dataclass
+class _BarInfo:
+    voices: list          # [[beat_ids per voice]]
+    is_palm_mute: bool    # bar-level palm mute (persists to all beats in bar)
+    stroke: Optional[str] # bar-level stroke direction (may override beat stroke)
+
+
 def _parse_bars(root: ET.Element, voices_map: dict) -> dict:
-    """bar_id → [[beat_ids per voice], ...]"""
+    """bar_id → _BarInfo"""
     bars = {}
     for b in root.findall("Bars/Bar"):
         bid = b.get("id")
+
+        # Bar-level palm mute: GP can mark a whole bar as PM via drag gesture.
+        # This is stored on the Bar element rather than individual Beat elements,
+        # because the same Beat ID may be reused across PM and non-PM bars.
+        bar_pm     = _prop_enabled(b, "PalmMute")
+        bar_stroke = _prop_text(b, "Stroke", "Direction")
+
         voices_el = b.find("Voices")
         if voices_el is None or not voices_el.text:
-            bars[bid] = []
+            bars[bid] = _BarInfo(voices=[], is_palm_mute=bar_pm, stroke=bar_stroke)
             continue
         voice_ids = voices_el.text.split()
         bar_voices = []
@@ -138,7 +152,7 @@ def _parse_bars(root: ET.Element, voices_map: dict) -> dict:
             beat_ids = voices_map.get(vid, [])
             if beat_ids:
                 bar_voices.append(beat_ids)
-        bars[bid] = bar_voices
+        bars[bid] = _BarInfo(voices=bar_voices, is_palm_mute=bar_pm, stroke=bar_stroke)
     return bars
 
 
@@ -208,6 +222,7 @@ class _NoteInfo:
     is_tie_origin: bool
     articulation_id: str
     is_dead: bool
+    is_palm_mute: bool    # Note-level palm mute (<Property name="PalmMuted"><Enable /></Property>)
     is_hopo: bool
     slide_flags: int
     has_bend: bool
@@ -304,6 +319,10 @@ def _parse_notes(root: ET.Element) -> dict:
         # HopoOrigin は「次の音がH/P」という意味なので起点音自体は普通に弾く
         is_hopo = _prop_enabled(n, "HopoDestination")
 
+        # Palm mute: stored at note level as "PalmMuted" (with 'd'), NOT at beat level
+        # GuitarPro's drag-PM gesture marks each note individually.
+        is_palm_mute = _prop_enabled(n, "PalmMuted")
+
         # Dead / muted note
         is_dead = _prop_enabled(n, "Muted") or _prop_enabled(n, "DeadNote")
         nt = n.find("NoteType")
@@ -339,6 +358,7 @@ def _parse_notes(root: ET.Element) -> dict:
             is_tie_origin=is_tie_origin,
             articulation_id=art,
             is_dead=is_dead,
+            is_palm_mute=is_palm_mute,
             is_hopo=is_hopo,
             slide_flags=slide_flags,
             has_bend=has_bend,
@@ -402,8 +422,16 @@ def _tempo_from_root(root: ET.Element) -> float:
 
 # ── Articulation resolution ───────────────────────────────────────────────────
 
-def _resolve_art(note: _NoteInfo, beat: _BeatInfo) -> str:
-    """Apply beat-level technique flags on top of note-level articulation."""
+def _resolve_art(note: _NoteInfo, beat: _BeatInfo,
+                 bar_palm_mute: bool = False,
+                 bar_stroke: Optional[str] = None) -> str:
+    """Apply beat-level (and bar-level) technique flags on top of note-level articulation.
+
+    bar_palm_mute: True when the containing Bar element has PalmMute enabled.
+                   Guitar Pro stores "drag" palm-mute sections at Bar level rather
+                   than per-Beat, because the same Beat ID is shared across bars.
+    bar_stroke:    Stroke direction from the Bar element (overrides beat stroke when set).
+    """
     if beat.is_slap:    return "slap"
     if beat.is_pop:     return "pop"
     if beat.is_tapped:  return "tapping"
@@ -420,9 +448,12 @@ def _resolve_art(note: _NoteInfo, beat: _BeatInfo) -> str:
                "bend_up_slow", "vibrato", "dead_note"):
         return art
 
-    # Apply beat stroke + palm mute
-    stroke = beat.stroke
-    if beat.is_palm_mute:
+    # Merge PM flags: note-level (PalmMuted property) is the primary source.
+    # Beat-level and bar-level are kept as fallbacks for any edge-case GP variants.
+    is_pm  = note.is_palm_mute or beat.is_palm_mute or bar_palm_mute
+    stroke = beat.stroke if beat.stroke else bar_stroke
+
+    if is_pm:
         if note.is_dead:  return _pm_dead(stroke)
         else:              return _pm(stroke)
     else:
@@ -514,7 +545,10 @@ def parse_gp7_file(filepath: str) -> tuple:
         last_pitch: dict = {}           # string → 直前ノートのMIDIピッチ（H/P判定用）
 
         for bar_id, mb_ticks in bar_id_ticks:
-            bar_voices = bars_map.get(bar_id, [])
+            bar_info    = bars_map.get(bar_id, _BarInfo(voices=[], is_palm_mute=False, stroke=None))
+            bar_voices  = bar_info.voices
+            bar_pm      = bar_info.is_palm_mute
+            bar_stroke  = bar_info.stroke
             bar_end_tick = current_tick
 
             for beat_ids in bar_voices:
@@ -544,7 +578,9 @@ def parse_gp7_file(filepath: str) -> tuple:
                             if note.string in active_ties:
                                 info.events.append(active_ties.pop(note.string))
 
-                            art = _resolve_art(note, beat)
+                            art = _resolve_art(note, beat,
+                                               bar_palm_mute=bar_pm,
+                                               bar_stroke=bar_stroke)
 
                             # H/P判定: HopoDestinationノートの場合、前の音より高い→HO、低い→PO
                             if note.is_hopo:

@@ -3,7 +3,7 @@ Maps GuitarPro technique flags to a named articulation key,
 which the user then maps to a MIDI keyswitch note.
 """
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import ClassVar, Optional
 
 # Canonical articulation IDs used throughout the app
 ARTICULATION_IDS = [
@@ -100,33 +100,44 @@ ARTICULATION_LABELS = {
 
 
 @dataclass
-class VelocityTrigger:
-    min_vel: int
-    max_vel: int
-    articulation_id: str
-
-
-@dataclass
 class KeyswitchMapping:
-    """Maps articulation IDs to MIDI note numbers and optional velocity triggers."""
-    note_map: dict = field(default_factory=dict)        # articulation_id -> midi_note (int or None)
-    velocity_triggers: list = field(default_factory=list)  # list of VelocityTrigger
-    default_articulation: str = ""  # keyswitch inserted at MIDI start (empty = none)
+    """Maps articulation IDs to MIDI keyswitch note numbers.
+
+    Articulation is determined entirely from GPIF technique detection
+    (note/beat/bar level).  Velocity only affects note loudness.
+    """
+    note_map: dict = field(default_factory=dict)   # articulation_id -> midi_note (int)
+    default_articulation: str = ""  # keyswitch sent at MIDI start to initialize sampler
+
+    # PM family fallbacks: if a variant isn't explicitly mapped, try related variants.
+    # Stroke-unspecified (alt) → down, then up.  Up → alt, then down.
+    _PM_FALLBACKS: ClassVar[dict] = {
+        "palm_mute_alt":              ("palm_mute_down", "palm_mute_up"),
+        "palm_mute_up":               ("palm_mute_alt",  "palm_mute_down"),
+        "palm_mute_dead_alt":         ("palm_mute_dead_down",  "palm_mute_dead_up"),
+        "palm_mute_dead_up":          ("palm_mute_dead_alt",   "palm_mute_dead_down"),
+        "palm_mute_closed_alt":       ("palm_mute_closed_down", "palm_mute_closed_up"),
+        "palm_mute_closed_up":        ("palm_mute_closed_alt",  "palm_mute_closed_down"),
+        "palm_mute_semi_closed_alt":  ("palm_mute_semi_closed_down", "palm_mute_semi_closed_up"),
+        "palm_mute_semi_closed_up":   ("palm_mute_semi_closed_alt",  "palm_mute_semi_closed_down"),
+    }
 
     def get_note(self, articulation_id: str) -> Optional[int]:
-        return self.note_map.get(articulation_id)
+        note = self.note_map.get(articulation_id)
+        if note is not None:
+            return note
+        # PM family automatic fallback: unspecified/up stroke → try related variants
+        for fallback in self._PM_FALLBACKS.get(articulation_id, ()):
+            note = self.note_map.get(fallback)
+            if note is not None:
+                return note
+        return None
 
     def set_note(self, articulation_id: str, midi_note: Optional[int]):
         self.note_map[articulation_id] = midi_note
 
     def to_dict(self) -> dict:
-        d = {
-            "note_map": {k: v for k, v in self.note_map.items() if v is not None},
-            "velocity_triggers": [
-                {"min": vt.min_vel, "max": vt.max_vel, "articulation": vt.articulation_id}
-                for vt in self.velocity_triggers
-            ],
-        }
+        d: dict = {"note_map": {k: v for k, v in self.note_map.items() if v is not None}}
         if self.default_articulation:
             d["default_articulation"] = self.default_articulation
         return d
@@ -135,11 +146,8 @@ class KeyswitchMapping:
     def from_dict(cls, data: dict) -> "KeyswitchMapping":
         mapping = cls()
         mapping.note_map = {k: int(v) for k, v in data.get("note_map", {}).items()}
-        mapping.velocity_triggers = [
-            VelocityTrigger(vt["min"], vt["max"], vt["articulation"])
-            for vt in data.get("velocity_triggers", [])
-        ]
         mapping.default_articulation = data.get("default_articulation", "")
+        # velocity_triggers field is ignored (removed feature) — silently skipped
         return mapping
 
 
