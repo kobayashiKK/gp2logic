@@ -1,41 +1,14 @@
 """
 Main application window for GP2Logic.
+Manages a QTabWidget where each tab is one FileSessionWidget (one GP file).
 """
-import os
-from pathlib import Path
-
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QComboBox, QFileDialog, QSplitter, QGroupBox,
-    QStatusBar, QDialog, QDialogButtonBox, QLineEdit, QMessageBox,
-    QSizePolicy, QSpinBox
+    QMainWindow, QTabWidget, QPushButton, QStatusBar,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
-from PyQt6.QtGui import QFont, QAction
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QAction
 
-from core.gp_parser import parse_gp_file, TrackInfo
-from core.midi_generator import generate_midi
-from core.technique_mapper import KeyswitchMapping, ARTICULATION_IDS
-from core.preset_manager import list_presets, load_preset, save_preset
-
-from ui.keyswitch_editor import KeyswitchTableWidget
-from ui.drag_export_widget import DragExportWidget
-
-
-class ParseWorker(QObject):
-    finished = pyqtSignal(object, list)   # (song, [TrackInfo])
-    error = pyqtSignal(str)
-
-    def __init__(self, filepath: str):
-        super().__init__()
-        self._filepath = filepath
-
-    def run(self):
-        try:
-            song, tracks = parse_gp_file(self._filepath)
-            self.finished.emit(song, tracks)
-        except Exception as e:
-            self.error.emit(str(e))
+from ui.file_session_widget import FileSessionWidget
 
 
 class MainWindow(QMainWindow):
@@ -44,17 +17,14 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("GP2Logic — GuitarPro → Logic MIDI Converter")
         self.resize(900, 700)
 
-        self._song = None
-        self._tracks: list[TrackInfo] = []
-        self._mapping = KeyswitchMapping()
-        self._midi_bytes: bytes | None = None
-        self._current_filepath: str | None = None
+        self._statusbar = QStatusBar()
+        self.setStatusBar(self._statusbar)
 
         self._build_menu()
-        self._build_ui()
-        self._load_preset_list()
-        self._auto_load_first_preset()
-        self._status("GuitarProファイルを開いてください。")
+        self._build_tabs()
+
+        # Start with one empty tab
+        self._new_tab()
 
     # ──────────────────────────────────────────────────────
     # Menu
@@ -64,348 +34,123 @@ class MainWindow(QMainWindow):
         menu = self.menuBar()
 
         file_menu = menu.addMenu("ファイル")
+
         open_act = QAction("GuitarProを開く…", self)
         open_act.setShortcut("Ctrl+O")
-        open_act.triggered.connect(self._open_file)
+        open_act.triggered.connect(self._open_in_current_tab)
         file_menu.addAction(open_act)
+
+        new_tab_act = QAction("新規タブ", self)
+        new_tab_act.setShortcut("Ctrl+T")
+        new_tab_act.triggered.connect(self._new_tab_with_dialog)
+        file_menu.addAction(new_tab_act)
 
         self._reload_act = QAction("再読込", self)
         self._reload_act.setShortcut("Ctrl+R")
         self._reload_act.setEnabled(False)
-        self._reload_act.triggered.connect(self._reload_file)
+        self._reload_act.triggered.connect(self._reload_current_tab)
         file_menu.addAction(self._reload_act)
+
+        file_menu.addSeparator()
+
+        close_tab_act = QAction("タブを閉じる", self)
+        close_tab_act.setShortcut("Ctrl+W")
+        close_tab_act.triggered.connect(self._close_current_tab)
+        file_menu.addAction(close_tab_act)
 
         preset_menu = menu.addMenu("プリセット")
         save_preset_act = QAction("現在のマッピングをプリセットとして保存…", self)
-        save_preset_act.triggered.connect(self._save_preset_dialog)
+        save_preset_act.triggered.connect(self._save_preset_current_tab)
         preset_menu.addAction(save_preset_act)
 
     # ──────────────────────────────────────────────────────
-    # UI layout
+    # Tab widget
     # ──────────────────────────────────────────────────────
 
-    def _build_ui(self):
-        central = QWidget()
-        self.setCentralWidget(central)
-        root = QVBoxLayout(central)
-        root.setSpacing(8)
+    def _build_tabs(self):
+        self._tabs = QTabWidget()
+        self._tabs.setTabsClosable(True)
+        self._tabs.setMovable(True)
+        self._tabs.tabCloseRequested.connect(self._close_tab)
+        self._tabs.currentChanged.connect(self._on_tab_changed)
 
-        # Top bar
-        top = QHBoxLayout()
+        # "+" button in the top-right corner
+        add_btn = QPushButton("+")
+        add_btn.setFixedSize(26, 26)
+        add_btn.setToolTip("新規タブ (Ctrl+T)")
+        add_btn.clicked.connect(self._new_tab_with_dialog)
+        self._tabs.setCornerWidget(add_btn, Qt.Corner.TopRightCorner)
 
-        self._open_btn = QPushButton("📂 GuitarProを開く")
-        self._open_btn.setFixedHeight(32)
-        self._open_btn.clicked.connect(self._open_file)
-        top.addWidget(self._open_btn)
+        self.setCentralWidget(self._tabs)
 
-        self._reload_btn = QPushButton("🔄")
-        self._reload_btn.setFixedSize(32, 32)
-        self._reload_btn.setToolTip("再読込 (Cmd+R)")
-        self._reload_btn.setEnabled(False)
-        self._reload_btn.clicked.connect(self._reload_file)
-        top.addWidget(self._reload_btn)
-
-        self._file_label = QLabel("ファイル未選択")
-        self._file_label.setStyleSheet("color: #aaa;")
-        top.addWidget(self._file_label, 1)
-
-        top.addWidget(QLabel("トラック:"))
-        self._track_combo = QComboBox()
-        self._track_combo.setMinimumWidth(180)
-        self._track_combo.currentIndexChanged.connect(self._on_track_changed)
-        top.addWidget(self._track_combo)
-
-        root.addLayout(top)
-
-        # Preset bar
-        preset_bar = QHBoxLayout()
-        preset_bar.addWidget(QLabel("プリセット:"))
-        self._preset_combo = QComboBox()
-        self._preset_combo.setMinimumWidth(160)
-        self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
-        preset_bar.addWidget(self._preset_combo)
-
-        load_btn = QPushButton("読込")
-        load_btn.setFixedWidth(50)
-        load_btn.clicked.connect(self._load_preset_from_file)
-        preset_bar.addWidget(load_btn)
-
-        save_btn = QPushButton("保存")
-        save_btn.setFixedWidth(50)
-        save_btn.clicked.connect(self._save_preset_dialog)
-        preset_bar.addWidget(save_btn)
-
-        preset_bar.addStretch()
-
-        preset_bar.addWidget(QLabel("オクターブ:"))
-        self._octave_spin = QSpinBox()
-        self._octave_spin.setRange(-3, 3)
-        self._octave_spin.setValue(1)
-        self._octave_spin.setFixedWidth(52)
-        self._octave_spin.valueChanged.connect(self._on_mapping_changed)
-        preset_bar.addWidget(self._octave_spin)
-
-        generate_btn = QPushButton("▶ MIDI生成")
-        generate_btn.setFixedHeight(30)
-        generate_btn.clicked.connect(self._generate_midi)
-        preset_bar.addWidget(generate_btn)
-
-        root.addLayout(preset_bar)
-
-        # Splitter: keyswitch editor | drag widget
-        splitter = QSplitter(Qt.Orientation.Vertical)
-
-        # Keyswitch table + velocity triggers
-        ks_group = QGroupBox("キースイッチ設定")
-        ks_layout = QVBoxLayout(ks_group)
-
-        # Default keyswitch selector
-        default_row = QHBoxLayout()
-        default_row.addWidget(QLabel("初期キースイッチ:"))
-        self._default_art_combo = QComboBox()
-        self._default_art_combo.addItem("— なし —", "")
-        from core.technique_mapper import ARTICULATION_LABELS
-        for art_id in ARTICULATION_IDS:
-            label = ARTICULATION_LABELS.get(art_id, art_id)
-            self._default_art_combo.addItem(label, art_id)
-        self._default_art_combo.setMinimumWidth(200)
-        self._default_art_combo.currentIndexChanged.connect(self._on_mapping_changed)
-        default_row.addWidget(self._default_art_combo)
-        default_row.addStretch()
-        ks_layout.addLayout(default_row)
-
-        self._ks_table = KeyswitchTableWidget()
-        self._ks_table.mapping_changed.connect(self._on_mapping_changed)
-        ks_layout.addWidget(self._ks_table)
-
-        splitter.addWidget(ks_group)
-
-        # Drag export
-        export_group = QGroupBox("Logicへエクスポート")
-        export_layout = QVBoxLayout(export_group)
-        self._drag_widget = DragExportWidget()
-        self._drag_widget.export_requested.connect(self._generate_midi)
-        export_layout.addWidget(self._drag_widget)
-        splitter.addWidget(export_group)
-
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 1)
-        root.addWidget(splitter, 1)
-
-        # Status bar
-        self._statusbar = QStatusBar()
-        self.setStatusBar(self._statusbar)
-
-    # ──────────────────────────────────────────────────────
-    # File handling
-    # ──────────────────────────────────────────────────────
-
-    def _open_file(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "GuitarProファイルを開く", "",
-            "Guitar Pro Files (*.gp *.gpx *.gp5 *.gp4 *.gp3);;All Files (*)"
+    def _new_tab(self, filepath: str | None = None) -> FileSessionWidget:
+        """Create a new FileSessionWidget tab and make it active."""
+        widget = FileSessionWidget()
+        widget.status_changed.connect(self._on_status)
+        widget.title_changed.connect(
+            lambda title, w=widget: self._set_tab_title(w, title)
         )
-        if not path:
-            return
+        idx = self._tabs.addTab(widget, "新規")
+        self._tabs.setCurrentIndex(idx)
 
-        # iCloud Drive 上のファイルがローカルに落ちているか確認
-        import os
-        if not os.path.exists(path):
-            QMessageBox.warning(
-                self, "ファイルが見つかりません",
-                f"ファイルが存在しません:\n{path}"
-            )
-            return
-        try:
-            size = os.path.getsize(path)
-            if size == 0:
-                raise OSError("ファイルサイズが0です")
-            # iCloud のプレースホルダーは通常 4KB 未満
-            if size < 4096 and path.endswith(".gp"):
-                raise OSError(
-                    "ファイルが iCloud からまだダウンロードされていない可能性があります。\n"
-                    "Finder でファイルを右クリック →「ダウンロード」してから再度開いてください。"
-                )
-        except OSError as e:
-            QMessageBox.warning(self, "ファイルアクセスエラー", str(e))
-            return
+        if filepath:
+            widget.open_file(filepath)
 
-        self._current_filepath = path
-        self._reload_btn.setEnabled(True)
-        self._reload_act.setEnabled(True)
-        self._file_label.setText(Path(path).name)
-        self._status("ファイルを読み込んでいます…")
-        self._start_parse(path)
+        return widget
 
-    def _reload_file(self):
-        if self._current_filepath:
-            self._status("再読込しています…")
-            self._start_parse(self._current_filepath)
+    def _new_tab_with_dialog(self):
+        """Open a new tab and immediately show the GP file dialog."""
+        widget = self._new_tab()
+        widget.open_file()   # shows file-open dialog
 
-    def _start_parse(self, filepath: str):
-        self._thread = QThread()
-        self._worker = ParseWorker(filepath)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.finished.connect(self._on_parse_done)
-        self._worker.finished.connect(self._thread.quit)
-        self._worker.error.connect(self._on_parse_error)
-        self._worker.error.connect(self._thread.quit)
-        self._thread.start()
+    def _close_tab(self, idx: int):
+        """Close the tab at *idx*; keep at least one tab open."""
+        if self._tabs.count() > 1:
+            self._tabs.removeTab(idx)
 
-    def _on_parse_done(self, song, tracks):
-        self._song = song
-        self._tracks = tracks
-        self._track_combo.blockSignals(True)
-        self._track_combo.clear()
-        for t in tracks:
-            self._track_combo.addItem(f"{t.index + 1}: {t.name}", t.index)
-        self._track_combo.blockSignals(False)
-        self._track_combo.setCurrentIndex(0)
-        self._on_track_changed(0)
-        n_events = sum(len(t.events) for t in tracks)
-        self._status(f"読込完了: {len(tracks)}トラック, 合計{n_events}ノート")
+    def _close_current_tab(self):
+        self._close_tab(self._tabs.currentIndex())
 
-    def _on_parse_error(self, msg: str):
-        QMessageBox.critical(self, "読込エラー", f"ファイルの読み込みに失敗しました:\n{msg}")
-        self._status("読込エラー")
+    def _on_tab_changed(self, idx: int):
+        """Restore status bar and menu state for the newly active tab."""
+        widget = self._tabs.widget(idx)
+        if isinstance(widget, FileSessionWidget):
+            self._statusbar.showMessage(widget.last_status)
+            self._reload_act.setEnabled(widget.has_file())
 
-    def _on_track_changed(self, idx: int):
-        self._midi_bytes = None
-        self._drag_widget.set_midi_bytes(None)
-        if idx < 0 or idx >= len(self._tracks):
-            return
-        track = self._tracks[idx]
-        arts = {e.articulation_id for e in track.events}
-        self._status(
-            f"トラック: {track.name} | ノート数: {len(track.events)} | 検出された奏法: {len(arts)}種"
-        )
+    def _set_tab_title(self, widget: FileSessionWidget, title: str):
+        idx = self._tabs.indexOf(widget)
+        if idx >= 0:
+            self._tabs.setTabText(idx, title)
 
     # ──────────────────────────────────────────────────────
-    # Preset management
+    # Delegates to the active tab
     # ──────────────────────────────────────────────────────
 
-    def _auto_load_first_preset(self):
-        if self._presets:
-            try:
-                name, mapping = load_preset(self._presets[0]['path'])
-                self._apply_mapping(mapping)
-                self._preset_combo.blockSignals(True)
-                self._preset_combo.setCurrentIndex(1)
-                self._preset_combo.blockSignals(False)
-            except Exception:
-                pass
+    def _current_session(self) -> FileSessionWidget | None:
+        w = self._tabs.currentWidget()
+        return w if isinstance(w, FileSessionWidget) else None
 
-    def _load_preset_list(self):
-        self._presets = list_presets()
-        self._preset_combo.blockSignals(True)
-        self._preset_combo.clear()
-        self._preset_combo.addItem("— プリセットを選択 —", None)
-        for p in self._presets:
-            label = p["name"] + (" (組込)" if p["builtin"] else "")
-            self._preset_combo.addItem(label, p["path"])
-        self._preset_combo.blockSignals(False)
+    def _open_in_current_tab(self):
+        s = self._current_session()
+        if s:
+            s.open_file()
 
-    def _on_preset_selected(self, idx: int):
-        path = self._preset_combo.currentData()
-        if path is None:
-            return
-        try:
-            name, mapping = load_preset(path)
-            self._apply_mapping(mapping)
-            self._status(f"プリセット '{name}' を読み込みました。")
-        except Exception as e:
-            QMessageBox.warning(self, "プリセットエラー", str(e))
+    def _reload_current_tab(self):
+        s = self._current_session()
+        if s:
+            s.reload_file()
 
-    def _load_preset_from_file(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "プリセットを読み込む", "", "JSON Files (*.json)"
-        )
-        if not path:
-            return
-        try:
-            name, mapping = load_preset(path)
-            self._apply_mapping(mapping)
-            self._load_preset_list()
-            self._status(f"プリセット '{name}' を読み込みました。")
-        except Exception as e:
-            QMessageBox.warning(self, "プリセットエラー", str(e))
-
-    def _save_preset_dialog(self):
-        dlg = QDialog(self)
-        dlg.setWindowTitle("プリセットを保存")
-        layout = QVBoxLayout(dlg)
-        layout.addWidget(QLabel("プリセット名:"))
-        name_edit = QLineEdit("My Preset")
-        layout.addWidget(name_edit)
-        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        btns.accepted.connect(dlg.accept)
-        btns.rejected.connect(dlg.reject)
-        layout.addWidget(btns)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            name = name_edit.text().strip() or "My Preset"
-            mapping = self._collect_mapping()
-            path = save_preset(name, mapping)
-            self._load_preset_list()
-            self._status(f"プリセット '{name}' を保存しました: {path}")
-
-    def _apply_mapping(self, mapping: KeyswitchMapping):
-        self._mapping = mapping
-        self._ks_table.set_mapping(mapping)
-        # Sync default articulation combo
-        default_art = mapping.default_articulation or ""
-        self._default_art_combo.blockSignals(True)
-        idx = self._default_art_combo.findData(default_art)
-        self._default_art_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self._default_art_combo.blockSignals(False)
-        self._midi_bytes = None
-        self._drag_widget.set_midi_bytes(None)
-
-    def _collect_mapping(self) -> KeyswitchMapping:
-        mapping = self._ks_table.get_mapping()
-        mapping.default_articulation = self._default_art_combo.currentData() or ""
-        return mapping
-
-    def _on_mapping_changed(self):
-        self._midi_bytes = None
-        self._drag_widget.set_midi_bytes(None)
+    def _save_preset_current_tab(self):
+        s = self._current_session()
+        if s:
+            s.save_preset_dialog()
 
     # ──────────────────────────────────────────────────────
-    # MIDI generation
+    # Status bar
     # ──────────────────────────────────────────────────────
 
-    def _generate_midi(self):
-        if not self._tracks:
-            QMessageBox.information(self, "情報", "先にGuitarProファイルを開いてください。")
-            return
-
-        track_idx = self._track_combo.currentData()
-        if track_idx is None:
-            return
-        track = self._tracks[track_idx]
-        if not track.events:
-            QMessageBox.warning(self, "警告", "選択したトラックにノートがありません。")
-            return
-
-        mapping = self._collect_mapping()
-        tempo = 120.0
-        if self._song and hasattr(self._song, 'tempo'):
-            tempo = float(self._song.tempo) or 120.0
-
-        pitch_offset = self._octave_spin.value() * 12
-        try:
-            self._midi_bytes = generate_midi(
-                track.events, mapping, tempo_bpm=tempo, pitch_offset=pitch_offset
-            )
-            self._drag_widget.set_midi_bytes(self._midi_bytes)
-            oct_str = f"+{self._octave_spin.value()}" if self._octave_spin.value() >= 0 else str(self._octave_spin.value())
-            self._status(f"MIDI生成完了 ({len(self._midi_bytes)} bytes, オクターブ{oct_str}) — Logicにドラッグしてください。")
-        except Exception as e:
-            QMessageBox.critical(self, "MIDI生成エラー", str(e))
-
-    # ──────────────────────────────────────────────────────
-    # Helpers
-    # ──────────────────────────────────────────────────────
-
-    def _status(self, msg: str):
-        self._statusbar.showMessage(msg)
+    def _on_status(self, msg: str):
+        """Show status only when it comes from the currently active tab."""
+        if self.sender() is self._tabs.currentWidget():
+            self._statusbar.showMessage(msg)
