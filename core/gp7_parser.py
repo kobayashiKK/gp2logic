@@ -226,7 +226,7 @@ class _NoteInfo:
     is_hopo: bool
     slide_flags: int
     has_bend: bool
-    has_vibrato: bool
+    vibrato_type: Optional[str]   # "Slight", "Wide", or None  (direct <Vibrato> child of Note)
     harmonic_type: Optional[str]
     bend_points: list = field(default_factory=list)  # list of (offset_frac, semitones)
 
@@ -306,9 +306,13 @@ def _parse_notes(root: ET.Element) -> dict:
                 except ValueError:
                     pass
 
-        # Vibrato
-        has_vibrato = (_prop_enabled(n, "Vibrato") or
-                       _prop_enabled(n, "VibratoWTremBar"))
+        # Vibrato: stored as <Vibrato>Slight</Vibrato> or <Vibrato>Wide</Vibrato>
+        # directly under <Note> — NOT inside <Properties>.
+        # _prop_enabled() cannot find this; use find() directly.
+        _vib_el = n.find("Vibrato")
+        vibrato_type: Optional[str] = None
+        if _vib_el is not None and _vib_el.text and _vib_el.text.strip() not in ("", "None"):
+            vibrato_type = _vib_el.text.strip()  # "Slight" | "Wide"
 
         # Bend
         has_bend = (_prop_enabled(n, "Bended") or
@@ -329,7 +333,10 @@ def _parse_notes(root: ET.Element) -> dict:
         if nt is not None and nt.text and nt.text.strip().lower() in ("dead", "muted"):
             is_dead = True
 
-        # Determine articulation (beat-level may override this later)
+        # Determine articulation (beat-level may override this later).
+        # Vibrato is expressed via pitch-bend LFO — no dedicated keyswitch needed,
+        # so vibrato notes keep the default articulation (alternate_picked) and
+        # pitch-bend messages are added in midi_generator.
         art = "alternate_picked"
         if h_type == "Natural":
             art = "natural_harmonic"
@@ -343,10 +350,9 @@ def _parse_notes(root: ET.Element) -> dict:
             art = "slide_auto"
         elif has_bend:
             art = "bend_up_slow"
-        elif has_vibrato:
-            art = "vibrato"
         elif is_dead:
             art = "dead_note"
+        # (vibrato_type intentionally omitted here — handled via pitch bend)
 
         bend_points = _parse_bend_points(n) if has_bend else []
 
@@ -362,7 +368,7 @@ def _parse_notes(root: ET.Element) -> dict:
             is_hopo=is_hopo,
             slide_flags=slide_flags,
             has_bend=has_bend,
-            has_vibrato=has_vibrato,
+            vibrato_type=vibrato_type,
             harmonic_type=h_type,
             bend_points=bend_points,
         )
@@ -600,6 +606,7 @@ def parse_gp7_file(filepath: str) -> tuple:
                                 articulation_id=art,
                                 string_num=note.string,
                                 bend_points=list(note.bend_points),
+                                vibrato_type=note.vibrato_type,
                             )
 
                             if note.is_tie_origin:

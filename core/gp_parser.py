@@ -23,7 +23,8 @@ class NoteEvent:
     velocity: int
     articulation_id: str     # canonical articulation key
     string_num: int = 0      # 0-based string number (GPIF convention)
-    bend_points: list = field(default_factory=list)  # list of BendPoint
+    bend_points: list = field(default_factory=list)   # list of BendPoint
+    vibrato_type: Optional[str] = None                # "Slight", "Wide", or None
 
 
 @dataclass
