@@ -151,15 +151,21 @@ def _build_all_strings_cc_messages(events: list, channel: int) -> list:
     Build a continuous CC1 (modulation) + CC11 (expression) envelope
     that flows across ALL notes in sequence — no resets between notes.
 
+    Both CC11 (Expression) and CC1 (Modulation) control dynamics/intensity in
+    most string libraries — CC1 is bow pressure / sound character, not vibrato
+    (vibrato is handled separately via pitch bend).  Both follow a similar
+    swell-and-decay arc, with CC1 peaking slightly earlier to give the natural
+    feel of bow pressure driving the tone before the full volume blooms.
+
     Each note's curve starts from the previous note's final CC values so
     dynamics connect naturally (legato feel).  Rests are bridged with a
-    smooth glide: expression drifts gently downward, modulation fades to 0.
+    smooth glide: both CC11 and CC1 drift gently downward during silence.
 
     Curve shapes by note length
     ───────────────────────────
-    Short  (< 0.5 beat):  crisp swell triangle; vibrato fades out
-    Medium (0.5–2 beats): attack bloom → sustain → taper; vibrato builds lightly
-    Long   (> 2 beats):   slow bloom → peak → natural decay; vibrato grows deep
+    Short  (< 0.5 beat):  crisp swell triangle
+    Medium (0.5–2 beats): attack bloom → sustain → slight taper
+    Long   (> 2 beats):   slow bloom → peak → natural decay
 
     The first control point of each note's curve is replaced by the previous
     note's end value, creating seamless CC continuity across note boundaries.
@@ -167,9 +173,9 @@ def _build_all_strings_cc_messages(events: list, channel: int) -> list:
     msgs = []
     sorted_evs = sorted(events, key=lambda e: e.tick)
 
-    # Initial CC state at MIDI tick 0
-    prev_exp      = 64   # neutral expression
-    prev_mod      = 0    # no modulation
+    # Initial CC state at MIDI tick 0 (neutral, no sound yet)
+    prev_exp      = 64
+    prev_mod      = 56   # CC1 starts slightly lower than CC11
     prev_end_tick = 0
 
     # Emit initial reset so playback always starts clean
@@ -187,8 +193,8 @@ def _build_all_strings_cc_messages(events: list, channel: int) -> list:
         gap = abs_tick - prev_end_tick
         if gap > 60:   # ignore sub-1/8-beat rounding gaps
             glide_steps = max(2, min(16, gap * CC_STEPS_PER_BEAT // TICKS_PER_BEAT))
-            rest_exp = max(58, prev_exp - 12)   # gently drift downward during rest
-            rest_mod = 0                         # vibrato fades to silence
+            rest_exp = max(52, prev_exp - 14)   # gently drift downward during rest
+            rest_mod = max(44, prev_mod - 14)   # CC1 drifts similarly
             for s in range(1, glide_steps + 1):
                 frac = s / glide_steps
                 tick = prev_end_tick + int(frac * gap)
@@ -206,19 +212,22 @@ def _build_all_strings_cc_messages(events: list, channel: int) -> list:
             prev_mod = rest_mod
 
         # ── Note curve: start anchored at prev_exp / prev_mod ────────
-        # Expression peak and end targets by note length (absolute values).
-        # Modulation peak/end targets: if prev_mod already exceeds target,
-        # the curve glides down gracefully rather than jumping.
+        # CC1 peaks slightly earlier than CC11 (bow pressure drives tone first),
+        # and its peak sits a few counts lower (pressure ≈ intensity, not raw volume).
         if beats < 0.5:
+            # Short — crisp swell
             exp_pts = [(0.0, prev_exp), (0.25,  98), (0.60,  92), (1.0,  62)]
-            mod_pts = [(0.0, prev_mod), (1.0,    0)]
+            mod_pts = [(0.0, prev_mod), (0.20,  92), (0.55,  84), (1.0,  56)]
         elif beats < 2.0:
+            # Medium — attack bloom → sustain → slight taper
             exp_pts = [(0.0, prev_exp), (0.20, 104), (0.60, 108), (0.82, 98), (1.0, 74)]
-            mod_pts = [(0.0, prev_mod), (0.65,   42), (1.0,  42)]
+            mod_pts = [(0.0, prev_mod), (0.16, 100), (0.55, 103), (0.78, 92), (1.0, 68)]
         else:
+            # Long — slow bloom → peak → natural decay
             exp_pts = [(0.0, prev_exp), (0.12, 100), (0.40, 114),
                        (0.72, 112), (0.90,  96), (1.0, 78)]
-            mod_pts = [(0.0, prev_mod), (0.40,   66), (1.0,  62)]
+            mod_pts = [(0.0, prev_mod), (0.10,  95), (0.36, 108),
+                       (0.68, 106), (0.86,  90), (1.0, 72)]
 
         steps = int(max(4, min(64, beats * CC_STEPS_PER_BEAT)))
         for s in range(steps + 1):
