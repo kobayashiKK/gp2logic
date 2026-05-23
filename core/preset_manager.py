@@ -3,10 +3,24 @@ Load and save keyswitch mapping presets as JSON files.
 """
 import json
 import os
+import sys
 from pathlib import Path
 from .technique_mapper import KeyswitchMapping
 
-BUILTIN_PRESETS_DIR = Path(__file__).parent.parent / "presets"
+
+def _resource_base() -> Path:
+    """Return the root directory for bundled resources.
+
+    When running inside a PyInstaller .app bundle, sys._MEIPASS points to the
+    directory where PyInstaller extracts everything.  In normal development,
+    fall back to the source-tree root (two levels up from this file).
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)
+    return Path(__file__).parent.parent
+
+
+BUILTIN_PRESETS_DIR = _resource_base() / "presets"
 USER_PRESETS_DIR = Path.home() / "Library" / "Application Support" / "GP2Logic" / "presets"
 
 
