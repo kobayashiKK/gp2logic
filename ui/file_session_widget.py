@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QLabel, QComboBox, QFileDialog, QGroupBox,
     QDialog, QDialogButtonBox, QLineEdit, QMessageBox,
-    QSplitter, QSpinBox,
+    QSplitter, QSpinBox, QCheckBox,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
 
@@ -122,6 +122,15 @@ class FileSessionWidget(QWidget):
 
         preset_bar.addStretch()
 
+        self._strings_cb = QCheckBox("🎻 ストリングス補正 (CC1/CC11)")
+        self._strings_cb.setToolTip(
+            "ノート長に応じた Expression (CC11) と Modulation (CC1) カーブを付与します。\n"
+            "ストリングス音源でリアルな強弱・ビブラートを表現するのに使用してください。"
+        )
+        self._strings_cb.stateChanged.connect(self._on_mapping_changed)
+        preset_bar.addWidget(self._strings_cb)
+
+        preset_bar.addSpacing(8)
         preset_bar.addWidget(QLabel("オクターブ:"))
         self._octave_spin = QSpinBox()
         self._octave_spin.setRange(-3, 3)
@@ -380,10 +389,12 @@ class FileSessionWidget(QWidget):
             tempo = float(self._song.tempo) or 120.0
 
         pitch_offset = self._octave_spin.value() * 12
+        strings_mode = self._strings_cb.isChecked()
         try:
             self._midi_bytes = generate_midi(
                 track.events, mapping,
                 tempo_bpm=tempo, pitch_offset=pitch_offset,
+                strings_mode=strings_mode,
             )
             self._drag_widget.set_midi_bytes(self._midi_bytes)
             oct_val = self._octave_spin.value()

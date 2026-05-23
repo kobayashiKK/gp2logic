@@ -13,6 +13,9 @@ PITCH_BEND_RANGE_SEMITONES = 2
 # Number of pitch bend interpolation steps per beat (higher = smoother)
 BEND_STEPS_PER_BEAT = 16
 
+# CC envelope resolution for strings mode (steps per beat, clamped 4–64 per note)
+CC_STEPS_PER_BEAT = 16
+
 
 def _scale_tick(gp_tick: int) -> int:
     """Scale from GP7 960 ticks/beat to output 480 ticks/beat."""
@@ -125,6 +128,117 @@ def _build_vibrato_messages(event, abs_tick: int, dur_ticks: int,
     return msgs
 
 
+def _interp_curve(points: list, t: float) -> float:
+    """
+    Linearly interpolate a list of (frac, value) control points at position t ∈ [0, 1].
+    Points must be sorted by frac ascending.
+    """
+    if t <= points[0][0]:
+        return float(points[0][1])
+    if t >= points[-1][0]:
+        return float(points[-1][1])
+    for i in range(len(points) - 1):
+        t0, v0 = points[i]
+        t1, v1 = points[i + 1]
+        if t0 <= t <= t1:
+            alpha = (t - t0) / (t1 - t0)
+            return v0 + alpha * (v1 - v0)
+    return float(points[-1][1])
+
+
+def _build_all_strings_cc_messages(events: list, channel: int) -> list:
+    """
+    Build a continuous CC1 (modulation) + CC11 (expression) envelope
+    that flows across ALL notes in sequence — no resets between notes.
+
+    Each note's curve starts from the previous note's final CC values so
+    dynamics connect naturally (legato feel).  Rests are bridged with a
+    smooth glide: expression drifts gently downward, modulation fades to 0.
+
+    Curve shapes by note length
+    ───────────────────────────
+    Short  (< 0.5 beat):  crisp swell triangle; vibrato fades out
+    Medium (0.5–2 beats): attack bloom → sustain → taper; vibrato builds lightly
+    Long   (> 2 beats):   slow bloom → peak → natural decay; vibrato grows deep
+
+    The first control point of each note's curve is replaced by the previous
+    note's end value, creating seamless CC continuity across note boundaries.
+    """
+    msgs = []
+    sorted_evs = sorted(events, key=lambda e: e.tick)
+
+    # Initial CC state at MIDI tick 0
+    prev_exp      = 64   # neutral expression
+    prev_mod      = 0    # no modulation
+    prev_end_tick = 0
+
+    # Emit initial reset so playback always starts clean
+    msgs.append((0, mido.Message('control_change', channel=channel,
+                                 control=11, value=prev_exp, time=0)))
+    msgs.append((0, mido.Message('control_change', channel=channel,
+                                 control=1,  value=prev_mod, time=0)))
+
+    for event in sorted_evs:
+        abs_tick  = _scale_tick(event.tick)
+        dur_ticks = max(1, _scale_tick(event.duration_ticks))
+        beats     = dur_ticks / TICKS_PER_BEAT
+
+        # ── Bridge any rest gap before this note ─────────────────────
+        gap = abs_tick - prev_end_tick
+        if gap > 60:   # ignore sub-1/8-beat rounding gaps
+            glide_steps = max(2, min(16, gap * CC_STEPS_PER_BEAT // TICKS_PER_BEAT))
+            rest_exp = max(58, prev_exp - 12)   # gently drift downward during rest
+            rest_mod = 0                         # vibrato fades to silence
+            for s in range(1, glide_steps + 1):
+                frac = s / glide_steps
+                tick = prev_end_tick + int(frac * gap)
+                if tick >= abs_tick:
+                    break
+                msgs.append((tick, mido.Message('control_change', channel=channel,
+                                                control=11,
+                                                value=max(0, min(127, int(prev_exp + frac * (rest_exp - prev_exp)))),
+                                                time=0)))
+                msgs.append((tick, mido.Message('control_change', channel=channel,
+                                                control=1,
+                                                value=max(0, min(127, int(prev_mod + frac * (rest_mod - prev_mod)))),
+                                                time=0)))
+            prev_exp = rest_exp
+            prev_mod = rest_mod
+
+        # ── Note curve: start anchored at prev_exp / prev_mod ────────
+        # Expression peak and end targets by note length (absolute values).
+        # Modulation peak/end targets: if prev_mod already exceeds target,
+        # the curve glides down gracefully rather than jumping.
+        if beats < 0.5:
+            exp_pts = [(0.0, prev_exp), (0.25,  98), (0.60,  92), (1.0,  62)]
+            mod_pts = [(0.0, prev_mod), (1.0,    0)]
+        elif beats < 2.0:
+            exp_pts = [(0.0, prev_exp), (0.20, 104), (0.60, 108), (0.82, 98), (1.0, 74)]
+            mod_pts = [(0.0, prev_mod), (0.65,   42), (1.0,  42)]
+        else:
+            exp_pts = [(0.0, prev_exp), (0.12, 100), (0.40, 114),
+                       (0.72, 112), (0.90,  96), (1.0, 78)]
+            mod_pts = [(0.0, prev_mod), (0.40,   66), (1.0,  62)]
+
+        steps = int(max(4, min(64, beats * CC_STEPS_PER_BEAT)))
+        for s in range(steps + 1):
+            frac = s / steps
+            tick = abs_tick + int(frac * dur_ticks)
+            exp_val = int(max(0, min(127, _interp_curve(exp_pts, frac))))
+            mod_val = int(max(0, min(127, _interp_curve(mod_pts, frac))))
+            msgs.append((tick, mido.Message('control_change', channel=channel,
+                                            control=11, value=exp_val, time=0)))
+            msgs.append((tick, mido.Message('control_change', channel=channel,
+                                            control=1,  value=mod_val, time=0)))
+
+        # Carry end values to the next note
+        prev_exp      = int(max(0, min(127, _interp_curve(exp_pts, 1.0))))
+        prev_mod      = int(max(0, min(127, _interp_curve(mod_pts, 1.0))))
+        prev_end_tick = abs_tick + dur_ticks
+
+    return msgs
+
+
 def _velocity_for_event(event, mapping: KeyswitchMapping) -> tuple:
     """Return (velocity, articulation_id).
     Velocity triggers have been removed — articulation comes entirely from GPIF
@@ -140,11 +254,14 @@ def generate_midi(
     midi_channel: int = 0,
     keyswitch_channel: int = 0,
     pitch_offset: int = 0,
+    strings_mode: bool = False,
 ) -> bytes:
     """
     Build a .mid file from NoteEvents + KeyswitchMapping.
-    - Keyswitches: inserted 1 tick before each articulation change, same track
-    - Pitch bend: generated for notes with bend_points
+    - Keyswitches:   inserted 1 tick before each articulation change, same track
+    - Pitch bend:    generated for notes with bend_points or vibrato_type
+    - strings_mode:  when True, adds CC1 (modulation) and CC11 (expression)
+                     envelopes shaped to each note's duration for realism
     """
     mid = mido.MidiFile(type=0, ticks_per_beat=TICKS_PER_BEAT)
     track = mido.MidiTrack()
@@ -155,6 +272,11 @@ def generate_midi(
     messages = []   # (abs_tick, msg)
 
     default_art = getattr(mapping, 'default_articulation', '')
+
+    # Strings mode: build the complete, connected CC1/CC11 envelope in one pass
+    # before processing individual notes (so per-note logic stays clean).
+    if strings_mode:
+        messages.extend(_build_all_strings_cc_messages(events, midi_channel))
 
     # Insert default keyswitch at MIDI start (tick 0) to initialize the sampler
     if default_art:
@@ -205,8 +327,10 @@ def generate_midi(
             messages.append((abs_tick + dur_ticks, mido.Message('note_off', channel=midi_channel,
                                                                 note=pitch, velocity=0,   time=0)))
 
-    # Sort: by tick, then note_off before note_on, pitchwheel before note_on
-    _ORDER = {'pitchwheel': 0, 'note_off': 1, 'note_on': 2}
+    # Sort: by tick, then CC/pitchwheel → note_off → note_on
+    # control_change and pitchwheel must precede note_on at the same tick
+    # so the sampler receives the correct state before triggering.
+    _ORDER = {'control_change': 0, 'pitchwheel': 0, 'note_off': 1, 'note_on': 2}
 
     def _sort_key(item):
         tick, msg = item
