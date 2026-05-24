@@ -193,8 +193,6 @@ class FileSessionWidget(QWidget):
         self._ks_table.mapping_changed.connect(self._on_mapping_changed)
         ks_layout.addWidget(self._ks_table)
 
-        splitter.addWidget(ks_group)
-
         export_group = QGroupBox("Logicへエクスポート")
         export_layout = QVBoxLayout(export_group)
         self._drag_widget = DragExportWidget()
@@ -202,10 +200,12 @@ class FileSessionWidget(QWidget):
         export_layout.addWidget(self._drag_widget)
         splitter.addWidget(export_group)
 
-        # Keyswitch area smaller: 3:2 ratio, with an explicit initial size hint
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-        splitter.setSizes([320, 140])
+        splitter.addWidget(ks_group)
+
+        # Export area on top (compact), keyswitch table below
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 3)
+        splitter.setSizes([140, 320])
         root.addWidget(splitter, 1)
 
     # ──────────────────────────────────────────────────────
