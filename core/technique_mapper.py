@@ -1,101 +1,108 @@
 """
 Maps GuitarPro technique flags to a named articulation key,
 which the user then maps to a MIDI keyswitch note.
+
+Articulation IDs follow GuitarPro's own technique vocabulary so the
+left column of the keyswitch editor shows familiar GP technique names.
 """
 from dataclasses import dataclass, field
 from typing import ClassVar, Optional
 
-# Canonical articulation IDs used throughout the app
+# Canonical articulation IDs — aligned with GuitarPro's technique names.
+# Order here controls the display order in the keyswitch editor.
 ARTICULATION_IDS = [
-    "alternate_picked",
-    "down_picked",
-    "up_picked",
-    "palm_mute_down",
-    "palm_mute_up",
-    "palm_mute_alt",
-    "palm_mute_semi_closed_down",
-    "palm_mute_semi_closed_up",
-    "palm_mute_semi_closed_alt",
-    "palm_mute_closed_down",
-    "palm_mute_closed_up",
-    "palm_mute_closed_alt",
-    "palm_mute_dead_down",
-    "palm_mute_dead_up",
-    "palm_mute_dead_alt",
-    "hammer_on",
-    "pull_off",
-    "natural_harmonic",
-    "pinch_harmonic",
-    "nasty_pinch_harmonic",
-    "artificial_harmonic",
-    "slide_auto",
-    "slide_slow_from_up",
-    "slide_slow_from_down",
-    "slide_slow_to_down",
-    "slide_slow_to_up",
-    "slide_fast_from_up",
-    "slide_fast_from_down",
-    "slide_fast_to_down",
-    "slide_fast_to_up",
-    "tremolo_picked",
-    "vibrato",
-    "bend_up_fast",
-    "bend_up_slow",
-    "tapping",
-    "slap",
-    "pop",
-    "dead_note",
-    "scrapes_noises",
-    "auto_power_chord",
-    "finger_pluck_open",
-    "finger_pluck_dead",
-    "thumb_slap",
+    # ── ピッキング ──────────────────────────────────────────────────────────
+    "normal",              # 通常
+    "accent",              # アクセント
+    "strong_accent",       # 強アクセント（マルカート）
+    "ghost_note",          # ゴーストノート
+    "dead_note",           # デッドノート
+    # ── レガート ────────────────────────────────────────────────────────────
+    "hammer_on",           # ハンマリング
+    "pull_off",            # プリング
+    # ── スライド ────────────────────────────────────────────────────────────
+    "shift_slide",         # シフトスライド
+    "legato_slide",        # レガートスライド
+    "slide_out_down",      # スライドアウト（下）
+    "slide_out_up",        # スライドアウト（上）
+    "slide_in_below",      # スライドイン（下から）
+    "slide_in_above",      # スライドイン（上から）
+    # ── パームミュート ──────────────────────────────────────────────────────
+    "palm_mute",           # パームミュート
+    "palm_mute_dead",      # パームミュート＋デッドノート
+    # ── ハーモニクス ────────────────────────────────────────────────────────
+    "natural_harmonic",    # ナチュラルハーモニクス
+    "pinch_harmonic",      # ピンチハーモニクス
+    "artificial_harmonic", # アーティフィシャルハーモニクス
+    # ── 特殊奏法 ────────────────────────────────────────────────────────────
+    "tremolo_picking",     # トレモロピッキング
+    "tapping",             # タッピング
+    "slap",                # スラップ
+    "pop",                 # ポップ
 ]
 
+# Display labels shown in the keyswitch editor left column.
 ARTICULATION_LABELS = {
-    "alternate_picked":           "Alternate Picked",
-    "down_picked":                "Down Picked",
-    "up_picked":                  "Up Picked",
-    "palm_mute_down":             "Down Open Palm Mute",
-    "palm_mute_up":               "Up Open Palm Mute",
-    "palm_mute_alt":              "Alt Open Palm Mute",
-    "palm_mute_semi_closed_down": "Down Mute Semi Closed",
-    "palm_mute_semi_closed_up":   "Up Mute Semi Closed",
-    "palm_mute_semi_closed_alt":  "Alternate Mute Semi Closed",
-    "palm_mute_closed_down":      "Down Mute Closed",
-    "palm_mute_closed_up":        "Up Mute Closed",
-    "palm_mute_closed_alt":       "Alternate Mute Closed",
-    "palm_mute_dead_down":        "Down Mute Dead",
-    "palm_mute_dead_up":          "Up Mute Dead",
-    "palm_mute_dead_alt":         "Alternate Mute Dead",
-    "hammer_on":                  "Hammer-On",
-    "pull_off":                   "Pull-Off",
-    "natural_harmonic":           "Natural Harmonic",
-    "pinch_harmonic":             "Pinch Harmonic",
-    "nasty_pinch_harmonic":       "Nasty Pinch Harmonic",
-    "artificial_harmonic":        "Artificial Harmonic",
-    "slide_auto":                 "*Auto Slide",
-    "slide_slow_from_up":         "Slide Slow From Up",
-    "slide_slow_from_down":       "Slide Slow From Down",
-    "slide_slow_to_down":         "Slide Slow To Down",
-    "slide_slow_to_up":           "Slide Slow To Up",
-    "slide_fast_from_up":         "Slide Fast From Up",
-    "slide_fast_from_down":       "Slide Fast From Down",
-    "slide_fast_to_down":         "Slide Fast To Down",
-    "slide_fast_to_up":           "Slide Fast To Up",
-    "tremolo_picked":             "Tremolo Picked",
-    "vibrato":                    "Vibrato",
-    "bend_up_fast":               "Bend Up Fast",
-    "bend_up_slow":               "Bend Up Slow",
-    "tapping":                    "Tapping",
-    "slap":                       "Slap",
-    "pop":                        "Pop",
-    "dead_note":                  "Dead Note",
-    "scrapes_noises":             "Scrapes & Noises",
-    "auto_power_chord":           "*Auto Power Chord",
-    "finger_pluck_open":          "Finger Pluck Open",
-    "finger_pluck_dead":          "Finger Pluck Dead",
-    "thumb_slap":                 "Thumb Slap",
+    "normal":              "通常",
+    "accent":              "アクセント",
+    "strong_accent":       "強アクセント（マルカート）",
+    "ghost_note":          "ゴーストノート",
+    "dead_note":           "デッドノート",
+    "hammer_on":           "ハンマリング",
+    "pull_off":            "プリング",
+    "shift_slide":         "シフトスライド",
+    "legato_slide":        "レガートスライド",
+    "slide_out_down":      "スライドアウト（下）",
+    "slide_out_up":        "スライドアウト（上）",
+    "slide_in_below":      "スライドイン（下から）",
+    "slide_in_above":      "スライドイン（上から）",
+    "palm_mute":           "パームミュート",
+    "palm_mute_dead":      "パームミュート＋デッドノート",
+    "natural_harmonic":    "ナチュラルハーモニクス",
+    "pinch_harmonic":      "ピンチハーモニクス",
+    "artificial_harmonic": "アーティフィシャルハーモニクス",
+    "tremolo_picking":     "トレモロピッキング",
+    "tapping":             "タッピング",
+    "slap":                "スラップ",
+    "pop":                 "ポップ",
+}
+
+# Map from old (pre-GP-vocab) articulation IDs → new IDs.
+# Used in KeyswitchMapping.from_dict() to migrate saved presets automatically.
+_LEGACY_ID_MAP: dict = {
+    "alternate_picked":           "normal",
+    "down_picked":                "normal",
+    "up_picked":                  "normal",
+    "palm_mute_alt":              "palm_mute",
+    "palm_mute_down":             "palm_mute",
+    "palm_mute_up":               "palm_mute",
+    "palm_mute_semi_closed_alt":  None,   # no GP-vocab equivalent
+    "palm_mute_semi_closed_down": None,
+    "palm_mute_semi_closed_up":   None,
+    "palm_mute_closed_alt":       None,
+    "palm_mute_closed_down":      None,
+    "palm_mute_closed_up":        None,
+    "palm_mute_dead_alt":         "palm_mute_dead",
+    "palm_mute_dead_down":        "palm_mute_dead",
+    "palm_mute_dead_up":          "palm_mute_dead",
+    "slide_auto":                 "shift_slide",
+    "slide_slow_from_up":         "slide_in_above",
+    "slide_slow_from_down":       "slide_in_below",
+    "slide_slow_to_down":         "slide_out_down",
+    "slide_slow_to_up":           "slide_out_up",
+    "slide_fast_from_up":         "slide_in_above",
+    "slide_fast_from_down":       "slide_in_below",
+    "slide_fast_to_down":         "slide_out_down",
+    "slide_fast_to_up":           "slide_out_up",
+    "bend_up_fast":               None,   # pitch bend で処理（キースイッチ不要）
+    "bend_up_slow":               None,
+    "tremolo_picked":             "tremolo_picking",
+    "nasty_pinch_harmonic":       "pinch_harmonic",
+    "thumb_slap":                 "slap",
+    "scrapes_noises":             None,
+    "auto_power_chord":           None,
+    "finger_pluck_open":          None,
+    "finger_pluck_dead":          None,
 }
 
 
@@ -109,17 +116,10 @@ class KeyswitchMapping:
     note_map: dict = field(default_factory=dict)   # articulation_id -> midi_note (int)
     default_articulation: str = ""  # keyswitch sent at MIDI start to initialize sampler
 
-    # PM family fallbacks: if a variant isn't explicitly mapped, try related variants.
-    # Stroke-unspecified (alt) → down, then up.  Up → alt, then down.
+    # Fallback chain: if an articulation has no assigned keyswitch, try these in order.
+    # palm_mute_dead → palm_mute (use the regular PM sample when no dead-PM KS is set)
     _PM_FALLBACKS: ClassVar[dict] = {
-        "palm_mute_alt":              ("palm_mute_down", "palm_mute_up"),
-        "palm_mute_up":               ("palm_mute_alt",  "palm_mute_down"),
-        "palm_mute_dead_alt":         ("palm_mute_dead_down",  "palm_mute_dead_up"),
-        "palm_mute_dead_up":          ("palm_mute_dead_alt",   "palm_mute_dead_down"),
-        "palm_mute_closed_alt":       ("palm_mute_closed_down", "palm_mute_closed_up"),
-        "palm_mute_closed_up":        ("palm_mute_closed_alt",  "palm_mute_closed_down"),
-        "palm_mute_semi_closed_alt":  ("palm_mute_semi_closed_down", "palm_mute_semi_closed_up"),
-        "palm_mute_semi_closed_up":   ("palm_mute_semi_closed_alt",  "palm_mute_semi_closed_down"),
+        "palm_mute_dead": ("palm_mute",),
     }
 
     def get_note(self, articulation_id: str) -> Optional[int]:
@@ -145,8 +145,24 @@ class KeyswitchMapping:
     @classmethod
     def from_dict(cls, data: dict) -> "KeyswitchMapping":
         mapping = cls()
-        mapping.note_map = {k: int(v) for k, v in data.get("note_map", {}).items()}
-        mapping.default_articulation = data.get("default_articulation", "")
+        raw_map = {k: int(v) for k, v in data.get("note_map", {}).items()}
+
+        # Migrate legacy articulation IDs → GP-vocab IDs.
+        # When multiple old IDs map to the same new ID, the first encountered wins.
+        migrated: dict = {}
+        for old_id, midi_note in raw_map.items():
+            new_id = _LEGACY_ID_MAP.get(old_id, old_id)   # unknown old IDs pass through
+            if new_id is None:
+                continue   # dropped (Odin3-only, no GP-vocab equivalent)
+            if new_id not in migrated:
+                migrated[new_id] = midi_note
+
+        mapping.note_map = migrated
+
+        # Migrate default_articulation field
+        raw_default = data.get("default_articulation", "")
+        mapping.default_articulation = _LEGACY_ID_MAP.get(raw_default, raw_default) or ""
+
         # velocity_triggers field is ignored (removed feature) — silently skipped
         return mapping
 

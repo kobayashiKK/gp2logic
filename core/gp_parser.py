@@ -127,7 +127,7 @@ def _articulation_from_beat_note(beat, note, string_index: int) -> str:
     is_slap = beat_effect and getattr(beat_effect, 'slap', False)
     is_pop = beat_effect and getattr(beat_effect, 'pop', False)
 
-    # Priority order
+    # Priority order — IDs match GP-vocab (same as gp7_parser)
     if is_slap:
         return 'slap'
     if is_pop:
@@ -141,36 +141,38 @@ def _articulation_from_beat_note(beat, note, string_index: int) -> str:
     if harmonic == 'artificial':
         return 'artificial_harmonic'
     if is_tremolo:
-        return 'tremolo_picked'
+        return 'tremolo_picking'
     if slides:
-        return 'slide_auto'
+        # guitarpro slide types → GP-vocab IDs
+        s = slides[0]
+        if s == 'legato':
+            return 'legato_slide'
+        if s == 'shift':
+            return 'shift_slide'
+        if s == 'from_above':
+            return 'slide_in_above'
+        if s == 'from_below':
+            return 'slide_in_below'
+        if s == 'to_down':
+            return 'slide_out_down'
+        if s == 'to_up':
+            return 'slide_out_up'
+        return 'shift_slide'
     if is_hammer:
         return 'hammer_on'
     if is_pull:
         return 'pull_off'
     if bend:
-        return 'bend_up_slow'
+        return 'bend'
     if is_vibrato:
         return 'vibrato'
     if is_dead and palm_mute:
-        if stroke == 'down':
-            return 'palm_mute_dead_down'
-        elif stroke == 'up':
-            return 'palm_mute_dead_up'
-        return 'palm_mute_dead_alt'
+        return 'palm_mute_dead'
     if palm_mute:
-        if stroke == 'down':
-            return 'palm_mute_down'
-        elif stroke == 'up':
-            return 'palm_mute_up'
-        return 'palm_mute_alt'
+        return 'palm_mute'
     if is_dead:
         return 'dead_note'
-    if stroke == 'down':
-        return 'down_picked'
-    if stroke == 'up':
-        return 'up_picked'
-    return 'alternate_picked'
+    return 'normal'
 
 
 def _is_zip(filepath: str) -> bool:

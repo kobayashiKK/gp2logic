@@ -156,6 +156,32 @@ def _parse_bars(root: ET.Element, voices_map: dict) -> dict:
     return bars
 
 
+# ── Slide flag decoder ────────────────────────────────────────────────────────
+
+def _decode_slide_flags(slide_flags: int) -> Optional[str]:
+    """Decode GPIF Slide/Flags bitmask → most specific GP-vocab articulation ID.
+
+    Bit values observed in GPIF:
+      1  = Shift slide   (ポジション移動スライド)
+      2  = Legato slide  (なめらかなスライド)
+      4  = Slide out downwards
+      8  = Slide out upwards
+      16 = Slide in from below
+      32 = Slide in from above
+
+    Priority: pitch-to-pitch (shift/legato) > slide-in > slide-out.
+    """
+    if not slide_flags:
+        return None
+    if slide_flags & 1:   return "shift_slide"
+    if slide_flags & 2:   return "legato_slide"
+    if slide_flags & 32:  return "slide_in_above"
+    if slide_flags & 16:  return "slide_in_below"
+    if slide_flags & 4:   return "slide_out_down"
+    if slide_flags & 8:   return "slide_out_up"
+    return "shift_slide"   # unknown bits → treat as generic shift slide
+
+
 # ── Beats ─────────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -168,6 +194,8 @@ class _BeatInfo:
     is_slap: bool
     is_pop: bool
     is_tapped: bool
+    is_accent: bool        # GP accent mark (>)
+    is_strong_accent: bool # GP strong accent / marcato (^)
     velocity: int
 
 
@@ -193,6 +221,21 @@ def _parse_beats(root: ET.Element, rhythms: dict) -> dict:
         is_pop     = _prop_enabled(b, "Popped")
         is_tapped  = _prop_enabled(b, "Tapped")
 
+        # Accent: stored as Property[@name="Accent"]/<Flags> bitmask
+        # bit 1 (value 2) = normal accent (>), bit 2 (value 4) = strong accent (^)
+        is_accent = False
+        is_strong_accent = False
+        acc_prop = _prop(b, "Accent")
+        if acc_prop is not None:
+            f_el = acc_prop.find("Flags")
+            if f_el is not None and f_el.text:
+                try:
+                    acc_flags = int(f_el.text)
+                    is_accent        = bool(acc_flags & 2)
+                    is_strong_accent = bool(acc_flags & 4)
+                except ValueError:
+                    pass
+
         dyn_el = b.find("Dynamic")
         dyn = dyn_el.text.strip() if dyn_el is not None and dyn_el.text else None
         vel = _DYNAMIC_VEL.get(dyn, 95) if dyn else 95
@@ -206,6 +249,8 @@ def _parse_beats(root: ET.Element, rhythms: dict) -> dict:
             is_slap=is_slap,
             is_pop=is_pop,
             is_tapped=is_tapped,
+            is_accent=is_accent,
+            is_strong_accent=is_strong_accent,
             velocity=vel,
         )
     return beats
@@ -224,6 +269,7 @@ class _NoteInfo:
     is_dead: bool
     is_palm_mute: bool    # Note-level palm mute (<Property name="PalmMuted"><Enable /></Property>)
     is_hopo: bool
+    is_ghost: bool        # Ghost note (parenthesised note, played very softly)
     slide_flags: int
     has_bend: bool
     vibrato_type: Optional[str]   # "Slight", "Wide", or None  (direct <Vibrato> child of Note)
@@ -333,11 +379,18 @@ def _parse_notes(root: ET.Element) -> dict:
         if nt is not None and nt.text and nt.text.strip().lower() in ("dead", "muted"):
             is_dead = True
 
-        # Determine articulation (beat-level may override this later).
-        # Vibrato is expressed via pitch-bend LFO — no dedicated keyswitch needed,
-        # so vibrato notes keep the default articulation (alternate_picked) and
-        # pitch-bend messages are added in midi_generator.
-        art = "alternate_picked"
+        # Ghost note: parenthesised note in GP (played very softly, no sustain)
+        ghost_el = n.find("GhostNote")
+        is_ghost = (ghost_el is not None and ghost_el.text and
+                    ghost_el.text.strip().lower() in ("true", "1"))
+        if not is_ghost:
+            is_ghost = _prop_enabled(n, "Ghost")
+
+        # Determine note-level articulation (beat-level may refine this later).
+        # Priority: harmonic > hopo > slide > bend > dead > vibrato > normal
+        # Vibrato notes still produce pitch-bend LFO in midi_generator; we also
+        # assign the articulation so users can map a vibrato keyswitch.
+        art = "normal"
         if h_type == "Natural":
             art = "natural_harmonic"
         elif h_type in ("Pinch", "Semi"):
@@ -347,12 +400,15 @@ def _parse_notes(root: ET.Element) -> dict:
         elif is_hopo:
             art = "hammer_on"
         elif slide_flags:
-            art = "slide_auto"
+            art = _decode_slide_flags(slide_flags) or "shift_slide"
         elif has_bend:
-            art = "bend_up_slow"
+            art = "bend"
         elif is_dead:
             art = "dead_note"
-        # (vibrato_type intentionally omitted here — handled via pitch bend)
+        elif vibrato_type == "Wide":
+            art = "vibrato_wide"
+        elif vibrato_type:
+            art = "vibrato"
 
         bend_points = _parse_bend_points(n) if has_bend else []
 
@@ -366,6 +422,7 @@ def _parse_notes(root: ET.Element) -> dict:
             is_dead=is_dead,
             is_palm_mute=is_palm_mute,
             is_hopo=is_hopo,
+            is_ghost=is_ghost,
             slide_flags=slide_flags,
             has_bend=has_bend,
             vibrato_type=vibrato_type,
@@ -428,6 +485,18 @@ def _tempo_from_root(root: ET.Element) -> float:
 
 # ── Articulation resolution ───────────────────────────────────────────────────
 
+# Articulation IDs that represent specific note-level techniques.
+# These are never overridden by beat-level stroke direction or palm-mute flags.
+_PROTECTED_ART = frozenset({
+    "natural_harmonic", "pinch_harmonic", "artificial_harmonic",
+    "hammer_on", "pull_off",
+    "shift_slide", "legato_slide",
+    "slide_out_down", "slide_out_up",
+    "slide_in_below", "slide_in_above",
+    "bend", "vibrato", "vibrato_wide",
+})
+
+
 def _resolve_art(note: _NoteInfo, beat: _BeatInfo,
                  bar_palm_mute: bool = False,
                  bar_stroke: Optional[str] = None) -> str:
@@ -436,59 +505,43 @@ def _resolve_art(note: _NoteInfo, beat: _BeatInfo,
     bar_palm_mute: True when the containing Bar element has PalmMute enabled.
                    Guitar Pro stores "drag" palm-mute sections at Bar level rather
                    than per-Beat, because the same Beat ID is shared across bars.
-    bar_stroke:    Stroke direction from the Bar element (overrides beat stroke when set).
+    bar_stroke:    Stroke direction from the Bar element (not used for keyswitch
+                   selection any more, kept for future use).
     """
-    if beat.is_slap:    return "slap"
-    if beat.is_pop:     return "pop"
-    if beat.is_tapped:  return "tapping"
+    # Beat-level special techniques take absolute priority
+    if beat.is_slap:   return "slap"
+    if beat.is_pop:    return "pop"
+    if beat.is_tapped: return "tapping"
 
     art = note.articulation_id
 
-    # Tremolo only overrides the default
-    if beat.is_tremolo and art == "alternate_picked":
-        return "tremolo_picked"
+    # Tremolo picking only overrides a plain "normal" note
+    if beat.is_tremolo and art == "normal":
+        return "tremolo_picking"
 
-    # Note-level articulations that beat stroke/PM should NOT override
-    if art in ("natural_harmonic", "pinch_harmonic", "artificial_harmonic",
-               "hammer_on", "pull_off", "slide_auto",
-               "bend_up_slow", "vibrato", "dead_note"):
+    # Technique-specific articulations are never overridden
+    if art in _PROTECTED_ART:
         return art
 
-    # Merge PM flags: note-level (PalmMuted property) is the primary source.
-    # Beat-level and bar-level are kept as fallbacks for any edge-case GP variants.
-    is_pm  = note.is_palm_mute or beat.is_palm_mute or bar_palm_mute
-    stroke = beat.stroke if beat.stroke else bar_stroke
+    # Ghost note: takes precedence over PM/dead categorisation
+    if note.is_ghost:
+        return "ghost_note"
+
+    # Merge PM flags from all levels: note-level (drag-PM) is the primary source;
+    # beat-level and bar-level cover legacy / edge-case GP representations.
+    is_pm = note.is_palm_mute or beat.is_palm_mute or bar_palm_mute
 
     if is_pm:
-        if note.is_dead:  return _pm_dead(stroke)
-        else:              return _pm(stroke)
+        return "palm_mute_dead" if note.is_dead else "palm_mute"
     else:
-        if note.is_dead:  return "dead_note"
-        else:              return _stroke(stroke)
-
-
-def _stroke(d: Optional[str]) -> str:
-    if d is None: return "alternate_picked"
-    d = d.lower()
-    if "down" in d: return "down_picked"
-    if "up"   in d: return "up_picked"
-    return "alternate_picked"
-
-
-def _pm(d: Optional[str]) -> str:
-    if d is None: return "palm_mute_alt"
-    d = d.lower()
-    if "down" in d: return "palm_mute_down"
-    if "up"   in d: return "palm_mute_up"
-    return "palm_mute_alt"
-
-
-def _pm_dead(d: Optional[str]) -> str:
-    if d is None: return "palm_mute_dead_alt"
-    d = d.lower()
-    if "down" in d: return "palm_mute_dead_down"
-    if "up"   in d: return "palm_mute_dead_up"
-    return "palm_mute_dead_alt"
+        if note.is_dead:
+            return "dead_note"
+        # Accent modifiers only apply to plain-picked notes
+        if beat.is_strong_accent:
+            return "strong_accent"
+        if beat.is_accent:
+            return "accent"
+        return "normal"
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
