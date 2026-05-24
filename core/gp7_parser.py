@@ -270,6 +270,7 @@ class _NoteInfo:
     is_palm_mute: bool    # Note-level palm mute (<Property name="PalmMuted"><Enable /></Property>)
     is_hopo: bool
     is_ghost: bool        # Ghost note (parenthesised note, played very softly)
+    is_let_ring: bool     # <LetRing /> direct child of Note — ring until next note on same string
     slide_flags: int
     has_bend: bool
     vibrato_type: Optional[str]   # "Slight", "Wide", or None  (direct <Vibrato> child of Note)
@@ -386,6 +387,9 @@ def _parse_notes(root: ET.Element) -> dict:
         if not is_ghost:
             is_ghost = _prop_enabled(n, "Ghost")
 
+        # Let ring: <LetRing /> direct child of Note element (empty tag = enabled)
+        is_let_ring = n.find("LetRing") is not None
+
         # Determine note-level articulation (beat-level may refine this later).
         # Priority: harmonic > hopo > slide > bend > dead > vibrato > normal
         # Vibrato notes still produce pitch-bend LFO in midi_generator; we also
@@ -423,6 +427,7 @@ def _parse_notes(root: ET.Element) -> dict:
             is_palm_mute=is_palm_mute,
             is_hopo=is_hopo,
             is_ghost=is_ghost,
+            is_let_ring=is_let_ring,
             slide_flags=slide_flags,
             has_bend=has_bend,
             vibrato_type=vibrato_type,
@@ -660,6 +665,7 @@ def parse_gp7_file(filepath: str) -> tuple:
                                 string_num=note.string,
                                 bend_points=list(note.bend_points),
                                 vibrato_type=note.vibrato_type,
+                                is_let_ring=note.is_let_ring,
                             )
 
                             if note.is_tie_origin:

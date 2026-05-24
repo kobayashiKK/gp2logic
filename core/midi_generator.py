@@ -248,6 +248,63 @@ def _build_all_strings_cc_messages(events: list, channel: int) -> list:
     return msgs
 
 
+def _apply_let_ring(events: list) -> list:
+    """Extend duration of let-ring notes so each note rings until the next
+    note on the *same string* starts, capped at the start of any non-let-ring
+    note that appears anywhere in the track.
+
+    Guitar Pro let ring semantics:
+    - A let ring note rings beyond its written duration.
+    - It stops when a new note starts on the same string.
+    - When the let ring "section" ends (i.e. the next beat in the score has
+      let ring turned off), all ringing notes on every string must stop at
+      that boundary — even strings that have no new note in the non-LR section.
+
+    Two constraints are therefore applied simultaneously; the earlier one wins:
+      1. Next note on the same string  (string continuity rule)
+      2. First non-let-ring note anywhere in the track after this note
+         (section boundary rule — captures the "let ring turned off" moment)
+
+    This function mutates duration_ticks in-place and returns the list.
+    """
+    if not any(getattr(e, 'is_let_ring', False) for e in events):
+        return events  # fast-path: no let-ring notes in this track
+
+    sorted_evs = sorted(events, key=lambda e: e.tick)
+    n = len(sorted_evs)
+
+    for i, ev in enumerate(sorted_evs):
+        if not getattr(ev, 'is_let_ring', False):
+            continue
+
+        # Constraint 1: next note on the same string
+        next_string_tick = None
+        for j in range(i + 1, n):
+            if sorted_evs[j].tick > ev.tick and sorted_evs[j].string_num == ev.string_num:
+                next_string_tick = sorted_evs[j].tick
+                break
+
+        # Constraint 2: first non-let-ring note on ANY string after this note
+        # (marks the "let ring off" section boundary)
+        cap_tick = None
+        for j in range(i + 1, n):
+            if sorted_evs[j].tick > ev.tick and not getattr(sorted_evs[j], 'is_let_ring', False):
+                cap_tick = sorted_evs[j].tick
+                break
+
+        # Choose the tighter of the two constraints
+        candidates = [t for t in (next_string_tick, cap_tick) if t is not None]
+        if not candidates:
+            continue  # no constraint — keep original written duration
+
+        end_tick = min(candidates)
+        new_dur = end_tick - ev.tick
+        if new_dur > ev.duration_ticks:
+            ev.duration_ticks = new_dur
+
+    return events
+
+
 def _velocity_for_event(event, mapping: KeyswitchMapping) -> tuple:
     """Return (velocity, articulation_id).
     Velocity triggers have been removed — articulation comes entirely from GPIF
@@ -281,6 +338,10 @@ def generate_midi(
     messages = []   # (abs_tick, msg)
 
     default_art = getattr(mapping, 'default_articulation', '')
+
+    # Let ring: extend note durations before anything else so CC envelopes and
+    # keyswitch timing also reflect the correct (extended) note lengths.
+    events = _apply_let_ring(list(events))
 
     # Strings mode: build the complete, connected CC1/CC11 envelope in one pass
     # before processing individual notes (so per-note logic stays clean).

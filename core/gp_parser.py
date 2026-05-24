@@ -25,6 +25,7 @@ class NoteEvent:
     string_num: int = 0      # 0-based string number (GPIF convention)
     bend_points: list = field(default_factory=list)   # list of BendPoint
     vibrato_type: Optional[str] = None                # "Slight", "Wide", or None
+    is_let_ring: bool = False  # let ring: note rings until next note on same string
 
 
 @dataclass
@@ -217,6 +218,9 @@ def parse_gp_file(filepath: str) -> tuple:
                 voice_tick = current_tick
                 for beat in voice.beats:
                     duration_ticks = _beat_duration_ticks(beat, ticks_per_beat)
+                    beat_effect = getattr(beat, 'effect', None)
+                    is_let_ring = bool(beat_effect and getattr(beat_effect, 'letRing', False))
+
                     for note in beat.notes:
                         # note.value is the fret, note.string is 1-based
                         # The actual MIDI pitch: combine with tuning
@@ -236,6 +240,7 @@ def parse_gp_file(filepath: str) -> tuple:
                             velocity=int(velocity),
                             articulation_id=articulation,
                             string_num=note.string,
+                            is_let_ring=is_let_ring,
                         )
                         info.events.append(evt)
                     voice_tick += duration_ticks
