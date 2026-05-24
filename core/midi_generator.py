@@ -81,10 +81,15 @@ def _build_vibrato_messages(event, abs_tick: int, dur_ticks: int,
     on the Note element.  We express it the same way as choking — pitch-bend messages —
     so no additional keyswitch or sampler configuration is required.
 
+    Amplitude builds naturally from 0 → full depth via a smoothstep envelope,
+    mimicking how a real guitarist develops vibrato after plucking the string:
+    slight initial silence → gradual build-up over several cycles → full depth.
+
     Parameters (tunable constants at top of function):
-      rate_hz        – vibrato oscillation frequency (typical guitar: 5–6 Hz)
-      attack_secs    – silence before vibrato kicks in (natural playing feel)
-      depth_cents    – pitch deviation in cents (Slight ≈ 50 ¢, Wide ≈ 100 ¢)
+      rate_hz         – oscillation frequency (typical guitar: 5–6 Hz)
+      attack_secs     – initial silence before vibrato begins
+      ramp_cycles     – oscillation cycles over which amplitude grows 0 → full
+      depth_cents     – peak deviation in cents (Slight ≈ 50 ¢, Wide ≈ 100 ¢)
       steps_per_cycle – pitch-bend resolution per oscillation cycle
     """
     import math
@@ -94,35 +99,49 @@ def _build_vibrato_messages(event, abs_tick: int, dur_ticks: int,
         return []
 
     # ── Tunable parameters ────────────────────────────────────────────────────
-    RATE_HZ         = 5.5   # oscillation frequency
-    ATTACK_SECS     = 0.12  # delay before vibrato starts (seconds)
-    STEPS_PER_CYCLE = 16    # pitch-bend messages per full oscillation cycle
-    DEPTH_CENTS     = 100.0 if vib_type == "Wide" else 50.0  # ±cents
+    RATE_HZ         = 5.5    # oscillation frequency (Hz)
+    ATTACK_SECS     = 0.05   # initial silence before vibrato begins (seconds)
+    RAMP_CYCLES     = 3.5    # oscillation cycles to grow from 0 → full depth
+    STEPS_PER_CYCLE = 16     # pitch-bend messages per full oscillation cycle
+    DEPTH_CENTS     = 100.0 if vib_type == "Wide" else 50.0  # ±cents at full depth
     # ─────────────────────────────────────────────────────────────────────────
 
     ticks_per_sec   = TICKS_PER_BEAT * tempo_bpm / 60.0
     attack_ticks    = int(ticks_per_sec * ATTACK_SECS)
     ticks_per_cycle = ticks_per_sec / RATE_HZ
     step_ticks      = max(1, int(ticks_per_cycle / STEPS_PER_CYCLE))
+    ramp_ticks      = RAMP_CYCLES * ticks_per_cycle   # ticks to reach full depth
 
-    # depth in pitch-wheel units: PITCH_BEND_RANGE_SEMITONES semitones = ±8191
-    pb_amplitude = int(DEPTH_CENTS / 100.0 / PITCH_BEND_RANGE_SEMITONES * 8191)
+    # Peak depth in pitch-wheel units (PITCH_BEND_RANGE_SEMITONES semitones = ±8191)
+    # This is the maximum upward deviation; vibrato never goes below natural pitch.
+    pb_peak = int(DEPTH_CENTS / 100.0 / PITCH_BEND_RANGE_SEMITONES * 8191)
 
     msgs = []
-    t     = abs_tick + attack_ticks
-    end_t = abs_tick + dur_ticks
-    angle = 0.0
-
-    # Reset to centre at note start
+    # Reset to natural pitch at note start (covers the silent attack phase)
     msgs.append((abs_tick, mido.Message('pitchwheel', channel=channel, pitch=0, time=0)))
 
+    vib_start = abs_tick + attack_ticks
+    t         = vib_start
+    end_t     = abs_tick + dur_ticks
+    angle     = 0.0
+
     while t < end_t - step_ticks:
-        pb = int(pb_amplitude * math.sin(angle))
+        elapsed = t - vib_start
+        # Smooth amplitude envelope: grows 0 → 1 over ramp_ticks via smoothstep
+        # (slow start → fast middle → slow finish — natural left-hand feel)
+        raw      = min(1.0, elapsed / ramp_ticks) if ramp_ticks > 0 else 1.0
+        envelope = raw * raw * (3.0 - 2.0 * raw)   # smoothstep
+
+        # Guitar vibrato only bends UP — pitch oscillates between 0 and +peak.
+        # (1 - cos) / 2 gives a smooth 0→1→0 wave starting and ending at 0,
+        # unlike sin which swings through negative values (unnatural for guitar).
+        wave = (1.0 - math.cos(angle)) / 2.0        # range: 0.0 → 1.0
+        pb   = int(pb_peak * envelope * wave)
         msgs.append((t, mido.Message('pitchwheel', channel=channel, pitch=pb, time=0)))
         angle += 2.0 * math.pi / STEPS_PER_CYCLE
-        t += step_ticks
+        t     += step_ticks
 
-    # Reset to centre 1 tick after note-off
+    # Reset to natural pitch 1 tick after note-off
     msgs.append((end_t + 1, mido.Message('pitchwheel', channel=channel, pitch=0, time=0)))
 
     return msgs
