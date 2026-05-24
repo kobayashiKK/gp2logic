@@ -69,40 +69,67 @@ class FileSessionWidget(QWidget):
     # UI layout
     # ──────────────────────────────────────────────────────
 
+    # ── font helpers ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _apply_font(widget, size: int, bold: bool = False):
+        f = widget.font()
+        f.setPointSize(size)
+        f.setBold(bold)
+        widget.setFont(f)
+
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setSpacing(8)
-        root.setContentsMargins(6, 6, 6, 6)
+        root.setSpacing(6)
+        root.setContentsMargins(8, 8, 8, 8)
 
-        # ── Top bar ──────────────────────────────────────
-        top = QHBoxLayout()
+        # ── Primary action bar: 3 main controls ──────────────────────────────
+        # Open button | reload | filename | Track combo | Generate button
+        action_bar = QHBoxLayout()
+        action_bar.setSpacing(8)
 
-        self._open_btn = QPushButton("📂 GuitarProを開く")
-        self._open_btn.setFixedHeight(32)
+        self._open_btn = QPushButton("📂  GuitarProを開く")
+        self._open_btn.setFixedHeight(52)
+        self._open_btn.setMinimumWidth(200)
+        self._apply_font(self._open_btn, 14, bold=True)
         self._open_btn.clicked.connect(lambda: self.open_file())
-        top.addWidget(self._open_btn)
+        action_bar.addWidget(self._open_btn)
 
         self._reload_btn = QPushButton("🔄")
-        self._reload_btn.setFixedSize(32, 32)
+        self._reload_btn.setFixedSize(52, 52)
+        self._apply_font(self._reload_btn, 14)
         self._reload_btn.setToolTip("再読込 (Cmd+R)")
         self._reload_btn.setEnabled(False)
         self._reload_btn.clicked.connect(self.reload_file)
-        top.addWidget(self._reload_btn)
+        action_bar.addWidget(self._reload_btn)
 
         self._file_label = QLabel("ファイル未選択")
         self._file_label.setStyleSheet("color: #aaa;")
-        top.addWidget(self._file_label, 1)
+        action_bar.addWidget(self._file_label, 1)
 
-        top.addWidget(QLabel("トラック:"))
+        track_lbl = QLabel("トラック:")
+        self._apply_font(track_lbl, 13)
+        action_bar.addWidget(track_lbl)
+
         self._track_combo = QComboBox()
-        self._track_combo.setMinimumWidth(180)
+        self._track_combo.setMinimumWidth(240)
+        self._track_combo.setFixedHeight(52)
+        self._apply_font(self._track_combo, 13)
         self._track_combo.currentIndexChanged.connect(self._on_track_changed)
-        top.addWidget(self._track_combo)
+        action_bar.addWidget(self._track_combo)
 
-        root.addLayout(top)
+        generate_btn = QPushButton("▶  MIDI生成")
+        generate_btn.setFixedHeight(52)
+        generate_btn.setMinimumWidth(160)
+        self._apply_font(generate_btn, 14, bold=True)
+        generate_btn.clicked.connect(self._generate_midi)
+        action_bar.addWidget(generate_btn)
 
-        # ── Preset bar ───────────────────────────────────
+        root.addLayout(action_bar)
+
+        # ── Secondary bar: presets + options ─────────────────────────────────
         preset_bar = QHBoxLayout()
+        preset_bar.setSpacing(6)
         preset_bar.addWidget(QLabel("プリセット:"))
 
         self._preset_combo = QComboBox()
@@ -139,18 +166,15 @@ class FileSessionWidget(QWidget):
         self._octave_spin.valueChanged.connect(self._on_mapping_changed)
         preset_bar.addWidget(self._octave_spin)
 
-        generate_btn = QPushButton("▶ MIDI生成")
-        generate_btn.setFixedHeight(30)
-        generate_btn.clicked.connect(self._generate_midi)
-        preset_bar.addWidget(generate_btn)
-
         root.addLayout(preset_bar)
 
-        # ── Splitter: keyswitch editor | drag export ──────
+        # ── Splitter: keyswitch editor (compact) | drag export ────────────────
         splitter = QSplitter(Qt.Orientation.Vertical)
 
         ks_group = QGroupBox("キースイッチ設定")
         ks_layout = QVBoxLayout(ks_group)
+        ks_layout.setSpacing(4)
+        ks_layout.setContentsMargins(6, 4, 6, 4)
 
         default_row = QHBoxLayout()
         default_row.addWidget(QLabel("初期キースイッチ:"))
@@ -178,8 +202,10 @@ class FileSessionWidget(QWidget):
         export_layout.addWidget(self._drag_widget)
         splitter.addWidget(export_group)
 
+        # Keyswitch area smaller: 3:2 ratio, with an explicit initial size hint
         splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([320, 140])
         root.addWidget(splitter, 1)
 
     # ──────────────────────────────────────────────────────
